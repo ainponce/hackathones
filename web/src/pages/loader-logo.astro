@@ -1,0 +1,102 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import AsciiTorus from "../components/AsciiTorus.tsx";
+---
+
+<BaseLayout
+  title="Loader Logo | Hackathones"
+  description="Prueba de shader ASCII sobre un torus 3D con three.js + r3f + drei."
+>
+  <main class="page">
+    <header class="header">
+      <p class="prompt">
+        <span class="typed">$ hackathons-ar --loader-logo</span><span class="cursor"></span>
+      </p>
+      <br />
+      <p class="title">loader logo</p>
+      <p class="meta">ascii renderer & ascii shader | three.js + r3f + drei + tsl</p>
+    </header>
+
+    <div class="stage-wrap">
+      <div class="stage">
+        <AsciiTorus client:only="react" />
+      </div>
+    </div>
+
+    <a href="/" class="back">$ cd ..</a>
+  </main>
+</BaseLayout>
+
+<!-- beige/paper alt bg: #ede4d0 (swap body background + shader paper color in shared.tsx + AsciiRenderer bgColor) -->
+
+<style>
+  .page {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: var(--terminal-padding);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .header {
+    margin-bottom: 2rem;
+  }
+
+  .prompt {
+    font-weight: 700;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .typed {
+    display: inline-block;
+    overflow: hidden;
+    white-space: nowrap;
+    width: 0;
+    animation: typewriter 0.8s steps(30) 0.2s forwards;
+  }
+
+  .cursor::after {
+    content: "\2588";
+    animation: blink 1s step-end infinite;
+    margin-left: 2px;
+  }
+
+  .title {
+    animation: fadeUp 0.5s ease 0.9s both;
+  }
+
+  .meta {
+    color: var(--muted);
+    font-size: var(--font-size-sm);
+    animation: fadeUp 0.5s ease 1.1s both;
+  }
+
+  .stage-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 1rem 0 2rem;
+    animation: fadeUp 0.5s ease 1.2s both;
+  }
+
+  .stage {
+    position: relative;
+    width: min(92vmin, 900px);
+    height: min(92vmin, 900px);
+  }
+
+  .back {
+    color: var(--muted);
+    font-size: var(--font-size-sm);
+    text-decoration: none;
+    transition: color 0.2s ease;
+    animation: fadeUp 0.5s ease 1.4s both;
+  }
+
+  .back:hover {
+    color: var(--text);
+  }
+</style>
