@@ -1,18 +1,13 @@
-// RoomTerminal — collaborative brainstorm room rendered as a sub-terminal.
+// RoomTerminal — collaborative brainstorm room.
 //
 // Mounted by /room/index.astro as a client-only React island. Reads the room
-// slug from window.location.pathname (`/room/<slug>`, served via vercel.json
-// rewrite to keep the URL pretty without an SSR adapter).
+// slug from `?id=<slug>` (or `/room/<slug>` when a Vercel rewrite is in
+// play). Talks to Supabase directly: Postgres for persisted state, Realtime
+// for live sync.
 //
-// State flow:
-//   1. On mount, read session from localStorage and load the room row.
-//   2. If no handle yet, render the onboarding step (handle input).
-//   3. Once joined, subscribe to postgres_changes + presence on
-//      `room:<slug>`. Rehydrate every table on subscribe. Heartbeat every
-//      20s. Run `attempt_advance_phase` whenever this client toggles ready.
-//   4. The terminal stream is in-memory: lines append as events flow through
-//      realtime. Reduced from postgres_changes payloads via the deriveLine
-//      mapper.
+// UI is chat-styled with per-phase buttons (no command-line). Look and feel
+// stays terminal: mono font, thin borders, `[ ]` bracket buttons, CSS
+// variables for theming.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
@@ -37,14 +32,11 @@ import type {
   Vote,
 } from "../lib/room/types";
 
-// ---------- Slug extraction ----------
+// ---------- Slug + session helpers ----------
 
 function extractSlug(): string | null {
   if (typeof window === "undefined") return null;
   const path = window.location.pathname.replace(/\/+$/, "");
-  // Supported URL shapes:
-  //   /room/<slug>            (canonical, via vercel.json rewrite)
-  //   /room?id=<slug>         (fallback when rewrite is unavailable)
   const m = path.match(/^\/room\/([a-z0-9-]+)$/i);
   if (m) return m[1].toLowerCase();
   try {
@@ -52,6 +44,68 @@ function extractSlug(): string | null {
     if (id) return id.toLowerCase();
   } catch {}
   return null;
+}
+
+function shortId(id: string): string {
+  return id.replace(/-/g, "").slice(0, 6);
+}
+
+function loadSession(slug: string): SessionData | null {
+  try {
+    const raw = localStorage.getItem(ROOM_SESSION_KEY(slug));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.sessionToken !== "string") return null;
+    return parsed as SessionData;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(slug: string, data: SessionData): void {
+  try { localStorage.setItem(ROOM_SESSION_KEY(slug), JSON.stringify(data)); } catch {}
+}
+
+function clearSession(slug: string): void {
+  try { localStorage.removeItem(ROOM_SESSION_KEY(slug)); } catch {}
+}
+
+function isHandleValid(h: string): boolean {
+  return /^[a-zA-Z0-9_-]{2,32}$/.test(h.replace(/^@/, ""));
+}
+
+function newLine(kind: StreamLine["kind"], text: string): StreamLine {
+  return { id: Math.random().toString(36).slice(2), kind, text, ts: Date.now() };
+}
+
+// Relative time: "now", "2m", "15m", "1h", "3h", or HH:MM for older.
+function relTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  const diffSec = Math.max(0, (Date.now() - then) / 1000);
+  if (diffSec < 5) return "now";
+  if (diffSec < 60) return `${Math.floor(diffSec)}s`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
+  if (diffSec < 3600 * 6) return `${Math.floor(diffSec / 3600)}h`;
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function aliveCount(state: RoomState): number {
+  const cutoff = Date.now() - 60_000;
+  let n = 0;
+  for (const p of state.participants.values()) {
+    if (new Date(p.last_seen_at).getTime() > cutoff) n++;
+  }
+  return n;
+}
+
+function readyAliveCount(state: RoomState): number {
+  const cutoff = Date.now() - 60_000;
+  let n = 0;
+  for (const p of state.participants.values()) {
+    if (p.ready && new Date(p.last_seen_at).getTime() > cutoff) n++;
+  }
+  return n;
 }
 
 // ---------- Reducer ----------
@@ -69,8 +123,8 @@ type Action =
   | { type: "SET_PERSONA"; p: Persona | null }
   | { type: "SET_SCOPE"; s: Scope | null }
   | { type: "HYDRATE"; snapshot: HydrateSnapshot }
-  | { type: "APPEND_LINE"; line: StreamLine }
-  | { type: "CLEAR_STREAM" };
+  | { type: "APPEND_TOAST"; line: StreamLine }
+  | { type: "CLEAR_TOASTS" };
 
 interface HydrateSnapshot {
   room: Room;
@@ -120,30 +174,18 @@ function reducer(state: RoomState, action: Action): RoomState {
       return { ...state, ideas: m };
     }
     case "UPSERT_VOTE": {
-      // Idempotent on (session_token, idea_id, phase).
       const filtered = state.votes.filter(
-        (v) =>
-          !(
-            v.session_token === action.vote.session_token &&
-            v.idea_id === action.vote.idea_id &&
-            v.phase === action.vote.phase
-          )
+        (v) => !(v.session_token === action.vote.session_token && v.idea_id === action.vote.idea_id && v.phase === action.vote.phase)
       );
       return { ...state, votes: [...filtered, action.vote] };
     }
-    case "REMOVE_VOTE": {
+    case "REMOVE_VOTE":
       return {
         ...state,
         votes: state.votes.filter(
-          (v) =>
-            !(
-              v.session_token === action.v.session_token &&
-              v.idea_id === action.v.idea_id &&
-              v.phase === action.v.phase
-            )
+          (v) => !(v.session_token === action.v.session_token && v.idea_id === action.v.idea_id && v.phase === action.v.phase)
         ),
       };
-    }
     case "UPSERT_ASSESSMENT": {
       const m = new Map(state.assessments);
       m.set(action.a.id, action.a);
@@ -177,77 +219,12 @@ function reducer(state: RoomState, action: Action): RoomState {
         scope: s.scope,
       };
     }
-    case "APPEND_LINE":
-      return { ...state, stream: state.stream.concat(action.line).slice(-500) };
-    case "CLEAR_STREAM":
+    case "APPEND_TOAST":
+      return { ...state, stream: state.stream.concat(action.line).slice(-8) };
+    case "CLEAR_TOASTS":
       return { ...state, stream: [] };
   }
 }
-
-// ---------- Helpers ----------
-
-function shortId(id: string): string {
-  return id.replace(/-/g, "").slice(0, 6);
-}
-
-function findIdeaByShort(state: RoomState, short: string): Idea | null {
-  const target = short.replace(/^#/, "").toLowerCase();
-  for (const i of state.ideas.values()) {
-    if (i.id.replace(/-/g, "").toLowerCase().startsWith(target)) return i;
-  }
-  return null;
-}
-
-function loadSession(slug: string): SessionData | null {
-  try {
-    const raw = localStorage.getItem(ROOM_SESSION_KEY(slug));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (typeof parsed?.sessionToken !== "string") return null;
-    return parsed as SessionData;
-  } catch {
-    return null;
-  }
-}
-
-function saveSession(slug: string, data: SessionData): void {
-  try {
-    localStorage.setItem(ROOM_SESSION_KEY(slug), JSON.stringify(data));
-  } catch {}
-}
-
-function clearSession(slug: string): void {
-  try {
-    localStorage.removeItem(ROOM_SESSION_KEY(slug));
-  } catch {}
-}
-
-function isHandleValid(h: string): boolean {
-  return /^[a-zA-Z0-9_-]{2,32}$/.test(h.replace(/^@/, ""));
-}
-
-function newLine(
-  kind: StreamLine["kind"],
-  text: string
-): StreamLine {
-  return {
-    id: Math.random().toString(36).slice(2),
-    kind,
-    text,
-    ts: Date.now(),
-  };
-}
-
-// Phase ordering for the human-readable "expected → next" indicators.
-const PHASE_ORDER: Phase[] = [
-  "brainstorm",
-  "pick_two",
-  "assess",
-  "pick_winner",
-  "persona",
-  "scope",
-  "done",
-];
 
 // ---------- Component ----------
 
@@ -260,15 +237,11 @@ export default function RoomTerminal() {
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const heartbeatRef = useRef<number | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const streamRef = useRef<HTMLDivElement | null>(null);
-  // Realtime callbacks set up in a useEffect close over the state at effect
-  // time, so without a ref they'd report stale data (e.g. "@undefined voted"
-  // because participants was still empty when the channel subscribed). The
-  // ref is updated every render and read inside the callbacks.
+  // The realtime callbacks set up in a useEffect close over state at effect
+  // time; without a ref they'd report stale data. Updated every render.
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
-  const [input, setInput] = useState("");
+
   const [pendingHandle, setPendingHandle] = useState("");
   const [pendingHandleError, setPendingHandleError] = useState<string | null>(null);
 
@@ -278,21 +251,25 @@ export default function RoomTerminal() {
   );
   const t = useMemo(() => makeT(dict), [dict]);
 
-  const appendLine = useCallback((kind: StreamLine["kind"], text: string) => {
-    dispatch({ type: "APPEND_LINE", line: newLine(kind, text) });
+  const toast = useCallback((kind: StreamLine["kind"], text: string) => {
+    dispatch({ type: "APPEND_TOAST", line: newLine(kind, text) });
   }, []);
 
-  // -------- 1. Mount: discover slug + session + bootstrap client + load room
+  // Auto-dismiss toasts after 4s.
+  useEffect(() => {
+    if (state.stream.length === 0) return;
+    const handle = window.setTimeout(() => {
+      dispatch({ type: "APPEND_TOAST", line: newLine("muted", "") });
+      dispatch({ type: "CLEAR_TOASTS" });
+    }, 4000);
+    return () => window.clearTimeout(handle);
+  }, [state.stream.length]);
+
+  // ----- Bootstrap: discover slug + session + load room
 
   useEffect(() => {
-    if (!slug) {
-      setPhaseStatus("not_found");
-      return;
-    }
-    if (!hasSupabaseEnv()) {
-      setPhaseStatus("no_env");
-      return;
-    }
+    if (!slug) { setPhaseStatus("not_found"); return; }
+    if (!hasSupabaseEnv()) { setPhaseStatus("no_env"); return; }
     let cancelled = false;
 
     (async () => {
@@ -303,16 +280,9 @@ export default function RoomTerminal() {
         saveSession(slug, sess);
       }
       const c = makeRoomClient({ sessionToken: sess.sessionToken, hostToken: sess.hostToken });
-      const { data, error } = await c
-        .from("rooms")
-        .select("*")
-        .eq("slug", slug)
-        .maybeSingle();
+      const { data, error } = await c.from("rooms").select("*").eq("slug", slug).maybeSingle();
       if (cancelled) return;
-      if (error || !data) {
-        setPhaseStatus("not_found");
-        return;
-      }
+      if (error || !data) { setPhaseStatus("not_found"); return; }
       const room = data as Room;
       if (new Date(room.expires_at).getTime() <= Date.now()) {
         setPhaseStatus("expired");
@@ -324,12 +294,10 @@ export default function RoomTerminal() {
       setPhaseStatus("ready");
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [slug]);
 
-  // -------- 2. Join: when client + session exist and handle is set, subscribe.
+  // ----- Subscribe + heartbeat after the user has a handle.
 
   useEffect(() => {
     if (phaseStatus !== "ready" || !client || !session || !state.room || !session.handle) return;
@@ -337,8 +305,6 @@ export default function RoomTerminal() {
     let cancelled = false;
 
     (async () => {
-      // Insert (or refresh) our participant row. We try to upsert by primary
-      // key so reconnecting with the same session_token is idempotent.
       await client.from("room_participants").upsert(
         {
           room_id: room.id,
@@ -350,7 +316,6 @@ export default function RoomTerminal() {
         { onConflict: "room_id,session_token" }
       );
 
-      // Hydrate snapshot.
       const [participantsR, ideasR, votesR, assessmentsR, personaR, scopeR] = await Promise.all([
         client.from("room_participants").select("*").eq("room_id", room.id),
         client.from("room_ideas").select("*").eq("room_id", room.id),
@@ -359,7 +324,6 @@ export default function RoomTerminal() {
         client.from("room_personas").select("*").eq("room_id", room.id).maybeSingle(),
         client.from("room_scopes").select("*").eq("room_id", room.id).maybeSingle(),
       ]);
-
       if (cancelled) return;
 
       dispatch({
@@ -374,114 +338,65 @@ export default function RoomTerminal() {
           scope: (scopeR.data as Scope) ?? null,
         },
       });
-      appendLine("info", t("stream.welcome", { handle: "@" + session.handle! }));
 
-      // Subscribe.
       const channel = client.channel(`room:${room.slug}`, {
-        config: {
-          presence: { key: session.sessionToken },
-          broadcast: { self: false },
-        },
+        config: { presence: { key: session.sessionToken }, broadcast: { self: false } },
       });
-
       channelRef.current = channel;
-
       const tableFilter = `room_id=eq.${room.id}`;
 
       channel
         .on("postgres_changes", { event: "*", schema: "public", table: "rooms", filter: `id=eq.${room.id}` }, (payload) => {
-          if (payload.eventType === "DELETE") {
-            setPhaseStatus("expired");
-            return;
-          }
+          if (payload.eventType === "DELETE") { setPhaseStatus("expired"); return; }
           const newRoom = payload.new as Room;
           const prev = stateRef.current.room;
           dispatch({ type: "SET_ROOM", room: newRoom });
           if (prev && prev.phase !== newRoom.phase) {
             if (prev.phase === "assess" && newRoom.phase === "brainstorm") {
-              appendLine("muted", t("stream.phase_back_to_brainstorm"));
+              toast("muted", t("stream.phase_back_to_brainstorm"));
             }
-            appendLine("success", t("stream.phase_advanced", { phase: t("phase." + newRoom.phase) }));
+            toast("success", t("stream.phase_advanced", { phase: t("phase." + newRoom.phase) }));
           }
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "room_participants", filter: tableFilter }, (payload) => {
           if (payload.eventType === "DELETE") {
             const old = payload.old as Participant;
             dispatch({ type: "REMOVE_PARTICIPANT", sessionToken: old.session_token });
-            appendLine("muted", t("stream.left", { handle: "@" + old.handle }));
+            toast("muted", t("stream.left", { handle: "@" + old.handle }));
             return;
           }
           const p = payload.new as Participant;
           const before = stateRef.current.participants.get(p.session_token);
           dispatch({ type: "UPSERT_PARTICIPANT", p });
           if (!before && p.session_token !== session.sessionToken) {
-            appendLine("info", t("stream.joined", { handle: "@" + p.handle }));
-          }
-          if (before && before.ready !== p.ready && p.session_token !== session.sessionToken) {
-            appendLine("muted", t(p.ready ? "stream.ready_on" : "stream.ready_off", { handle: "@" + p.handle }));
+            toast("info", t("stream.joined", { handle: "@" + p.handle }));
           }
         })
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_ideas", filter: tableFilter }, (payload) => {
-          const i = payload.new as Idea;
-          dispatch({ type: "UPSERT_IDEA", idea: i });
-          if (i.session_token !== session.sessionToken) {
-            appendLine("info", t("stream.idea_added", { handle: "@" + i.handle, text: i.text }));
-          }
+          dispatch({ type: "UPSERT_IDEA", idea: payload.new as Idea });
         })
         .on("postgres_changes", { event: "DELETE", schema: "public", table: "room_ideas", filter: tableFilter }, (payload) => {
-          const old = payload.old as Idea;
-          dispatch({ type: "REMOVE_IDEA", id: old.id });
-          if (old.session_token !== session.sessionToken) {
-            appendLine("muted", t("stream.idea_removed", { handle: "@" + old.handle }));
-          }
+          dispatch({ type: "REMOVE_IDEA", id: (payload.old as Idea).id });
         })
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_votes", filter: tableFilter }, (payload) => {
-          const v = payload.new as Vote;
-          dispatch({ type: "UPSERT_VOTE", vote: v });
-          if (v.session_token !== session.sessionToken) {
-            const idea = stateRef.current.ideas.get(v.idea_id);
-            const voter = stateRef.current.participants.get(v.session_token);
-            appendLine("muted", t("stream.vote_cast", {
-              handle: "@" + (voter?.handle ?? "someone"),
-              short: idea ? shortId(idea.id) : "?",
-            }));
-          }
+          dispatch({ type: "UPSERT_VOTE", vote: payload.new as Vote });
         })
         .on("postgres_changes", { event: "DELETE", schema: "public", table: "room_votes", filter: tableFilter }, (payload) => {
-          const old = payload.old as Vote;
-          dispatch({ type: "REMOVE_VOTE", v: old });
+          dispatch({ type: "REMOVE_VOTE", v: payload.old as Vote });
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "room_assessments", filter: tableFilter }, (payload) => {
           if (payload.eventType === "DELETE") {
             dispatch({ type: "REMOVE_ASSESSMENT", id: (payload.old as Assessment).id });
             return;
           }
-          const a = payload.new as Assessment;
-          dispatch({ type: "UPSERT_ASSESSMENT", a });
-          if (a.session_token !== session.sessionToken) {
-            const idea = stateRef.current.ideas.get(a.idea_id);
-            const voter = stateRef.current.participants.get(a.session_token);
-            appendLine("muted", t("stream.assessment", {
-              handle: "@" + (voter?.handle ?? "someone"),
-              short: idea ? shortId(idea.id) : "?",
-              kind: a.kind === "feasibility" ? t("brief.assess_feasibility") : t("brief.assess_sota"),
-              verdict: a.verdict,
-              note: a.note ? ` — "${a.note}"` : "",
-            }));
-          }
+          dispatch({ type: "UPSERT_ASSESSMENT", a: payload.new as Assessment });
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "room_personas", filter: tableFilter }, (payload) => {
-          if (payload.eventType === "DELETE") {
-            dispatch({ type: "SET_PERSONA", p: null });
-            return;
-          }
+          if (payload.eventType === "DELETE") { dispatch({ type: "SET_PERSONA", p: null }); return; }
           dispatch({ type: "SET_PERSONA", p: payload.new as Persona });
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "room_scopes", filter: tableFilter }, (payload) => {
-          if (payload.eventType === "DELETE") {
-            dispatch({ type: "SET_SCOPE", s: null });
-            return;
-          }
+          if (payload.eventType === "DELETE") { dispatch({ type: "SET_SCOPE", s: null }); return; }
           dispatch({ type: "SET_SCOPE", s: payload.new as Scope });
         })
         .subscribe(async (status) => {
@@ -493,7 +408,6 @@ export default function RoomTerminal() {
           }
         });
 
-      // Heartbeat: keep last_seen_at fresh so the quorum function counts us.
       const beat = async () => {
         await client.from("room_participants")
           .update({ last_seen_at: new Date().toISOString() })
@@ -508,16 +422,12 @@ export default function RoomTerminal() {
       cancelled = true;
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
       const ch = channelRef.current;
-      if (ch) {
-        ch.unsubscribe();
-        channelRef.current = null;
-      }
+      if (ch) { ch.unsubscribe(); channelRef.current = null; }
     };
-    // We intentionally depend on session.handle (joining triggers this).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, session?.handle, state.room?.id]);
 
-  // -------- 3. Onboarding submit
+  // ----- Onboarding
 
   const onJoin = useCallback(async (handleRaw: string) => {
     if (!client || !session || !state.room) return;
@@ -534,11 +444,8 @@ export default function RoomTerminal() {
       ready: false,
     });
     if (error) {
-      if (error.code === "23505") {
-        setPendingHandleError(t("onboard.handle_taken"));
-      } else {
-        setPendingHandleError(error.message);
-      }
+      if (error.code === "23505") setPendingHandleError(t("onboard.handle_taken"));
+      else setPendingHandleError(error.message);
       return;
     }
     const updated: SessionData = { ...session, handle };
@@ -547,366 +454,161 @@ export default function RoomTerminal() {
     setPendingHandleError(null);
   }, [client, session, state.room, t]);
 
-  // -------- 4. Commands
+  // ----- Action handlers (replace the old command parser)
 
   const attemptAdvance = useCallback(async () => {
     if (!client || !state.room) return;
     await client.rpc("attempt_advance_phase", { p_room: state.room.id });
   }, [client, state.room]);
 
-  const runCommand = useCallback(async (raw: string) => {
+  const addIdea = useCallback(async (text: string) => {
     if (!client || !session || !state.room) return;
-    const room = state.room;
-    const phase = room.phase;
-    const trimmed = raw.trim();
-    if (!trimmed) return;
-    appendLine("echo", `$ ${trimmed}`);
+    const t0 = text.trim();
+    if (!t0) return;
+    if (t0.length > 280) { toast("error", t("cmd.error.idea_too_long")); return; }
+    const { error } = await client.from("room_ideas").insert({
+      room_id: state.room.id,
+      session_token: session.sessionToken,
+      handle: session.handle!,
+      text: t0,
+    });
+    if (error) {
+      if (/idea.+limit|23514/.test(error.message)) toast("error", t("cmd.error.idea_limit"));
+      else toast("error", t("cmd.error.network", { message: error.message }));
+    }
+  }, [client, session, state.room, t, toast]);
 
-    const tokens = trimmed.split(/\s+/);
-    const cmd = tokens[0].toLowerCase();
-    const args = tokens.slice(1);
+  const removeIdea = useCallback(async (idea: Idea) => {
+    if (!client) return;
+    await client.from("room_ideas").delete().eq("id", idea.id);
+  }, [client]);
 
-    const requirePhase = (allowed: Phase[]) => {
-      if (!allowed.includes(phase)) {
-        appendLine("error", t("cmd.error.wrong_phase", { phase: t("phase." + phase) }));
-        return false;
+  const toggleVote = useCallback(async (idea: Idea, phase: "pick_two" | "pick_winner") => {
+    if (!client || !session || !state.room) return;
+    const mine = state.votes.find(
+      (v) => v.session_token === session.sessionToken && v.idea_id === idea.id && v.phase === phase
+    );
+    if (mine) {
+      await client.from("room_votes")
+        .delete()
+        .eq("room_id", state.room.id)
+        .eq("session_token", session.sessionToken)
+        .eq("idea_id", idea.id)
+        .eq("phase", phase);
+    } else {
+      const { error } = await client.from("room_votes").insert({
+        room_id: state.room.id,
+        session_token: session.sessionToken,
+        idea_id: idea.id,
+        phase,
+      });
+      if (error) {
+        if (/vote.+limit|23514/.test(error.message)) toast("error", t("cmd.error.vote_limit"));
+        else if (error.code !== "23505") toast("error", t("cmd.error.network", { message: error.message }));
       }
-      return true;
+    }
+  }, [client, session, state.room, state.votes, t, toast]);
+
+  const setAssessment = useCallback(async (idea: Idea, kind: AssessmentKind, verdict: Verdict, note?: string | null) => {
+    if (!client || !session || !state.room) return;
+    await client.from("room_assessments")
+      .delete()
+      .eq("room_id", state.room.id)
+      .eq("idea_id", idea.id)
+      .eq("kind", kind)
+      .eq("session_token", session.sessionToken);
+    const { error } = await client.from("room_assessments").insert({
+      room_id: state.room.id,
+      idea_id: idea.id,
+      kind,
+      session_token: session.sessionToken,
+      verdict,
+      note: note?.trim() || null,
+    });
+    if (error) toast("error", t("cmd.error.network", { message: error.message }));
+  }, [client, session, state.room, t, toast]);
+
+  const setPersonaField = useCallback(async (field: "who" | "context" | "pain", value: string) => {
+    if (!client || !state.room) return;
+    const base = state.persona ?? {
+      room_id: state.room.id,
+      idea_id: state.room.winner_idea_id,
+      who: null,
+      context: null,
+      pain: null,
+      updated_at: new Date().toISOString(),
     };
+    await client.from("room_personas").upsert(
+      { ...base, [field]: value.trim().slice(0, 280) || null, room_id: state.room.id, updated_at: new Date().toISOString() },
+      { onConflict: "room_id" }
+    );
+  }, [client, state.room, state.persona]);
 
-    try {
-      switch (cmd) {
-        case "help": {
-          appendLine("info", t("help.header", { phase: t("phase." + phase) }));
-          appendLine("muted", t("help.line.ready"));
-          appendLine("muted", t("help.line.who"));
-          appendLine("muted", t("help.line.phase"));
-          appendLine("muted", t("help.line.help"));
-          appendLine("muted", t("help.line.clear"));
-          appendLine("muted", t("help.line.leave"));
-          appendLine("muted", t("help.line.close"));
-          if (phase === "brainstorm") {
-            appendLine("muted", t("help.line.idea"));
-            appendLine("muted", t("help.line.idea_rm"));
-          }
-          if (phase === "pick_two" || phase === "pick_winner") {
-            appendLine("muted", t("help.line.vote"));
-            appendLine("muted", t("help.line.unvote"));
-          }
-          if (phase === "assess") {
-            appendLine("muted", t("help.line.assess"));
-          }
-          if (phase === "persona") {
-            appendLine("muted", t("help.line.persona"));
-          }
-          if (phase === "scope") {
-            appendLine("muted", t("help.line.scope_add"));
-            appendLine("muted", t("help.line.scope_rm"));
-          }
-          return;
-        }
+  const addScopeItem = useCallback(async (bucket: "must_have" | "nice_to_have" | "out_of_scope", value: string) => {
+    if (!client || !state.room) return;
+    const v = value.trim().slice(0, 280);
+    if (!v) return;
+    const base = state.scope ?? {
+      room_id: state.room.id,
+      must_have: [],
+      nice_to_have: [],
+      out_of_scope: [],
+      updated_at: new Date().toISOString(),
+    };
+    await client.from("room_scopes").upsert(
+      { ...base, [bucket]: base[bucket].concat(v), room_id: state.room.id, updated_at: new Date().toISOString() },
+      { onConflict: "room_id" }
+    );
+  }, [client, state.room, state.scope]);
 
-        case "clear": {
-          dispatch({ type: "CLEAR_STREAM" });
-          return;
-        }
+  const removeScopeItem = useCallback(async (bucket: "must_have" | "nice_to_have" | "out_of_scope", index: number) => {
+    if (!client || !state.room || !state.scope) return;
+    const current = state.scope[bucket];
+    if (index < 0 || index >= current.length) return;
+    const updated = current.slice(0, index).concat(current.slice(index + 1));
+    await client.from("room_scopes").upsert(
+      { ...state.scope, [bucket]: updated, room_id: state.room.id, updated_at: new Date().toISOString() },
+      { onConflict: "room_id" }
+    );
+  }, [client, state.room, state.scope]);
 
-        case "who": {
-          const list = Array.from(state.participants.values())
-            .sort((a, b) => a.handle.localeCompare(b.handle));
-          for (const p of list) {
-            const tag = p.session_token === session.sessionToken ? " (you)" : "";
-            const r = p.ready ? "✓" : "·";
-            appendLine("info", `  ${r} @${p.handle}${tag}`);
-          }
-          return;
-        }
+  const toggleReady = useCallback(async () => {
+    if (!client || !session || !state.room) return;
+    const me = state.participants.get(session.sessionToken);
+    const next = !(me?.ready ?? false);
+    await client.from("room_participants")
+      .update({ ready: next, last_seen_at: new Date().toISOString() })
+      .eq("room_id", state.room.id)
+      .eq("session_token", session.sessionToken);
+    if (next) await attemptAdvance();
+  }, [client, session, state.room, state.participants, attemptAdvance]);
 
-        case "phase": {
-          const total = aliveCount(state);
-          const ready = readyAliveCount(state);
-          appendLine("info", t("status.phase", { phase: t("phase." + phase) }));
-          appendLine("muted", t("status.quorum", { ready, total }));
-          return;
-        }
+  const leaveRoom = useCallback(async () => {
+    if (!client || !session || !state.room) return;
+    await client.from("room_participants")
+      .delete()
+      .eq("room_id", state.room.id)
+      .eq("session_token", session.sessionToken);
+    clearSession(state.room.slug);
+    window.location.href = "/";
+  }, [client, session, state.room]);
 
-        case "ready":
-        case "not-ready": {
-          const nextReady = cmd === "ready";
-          await client.from("room_participants")
-            .update({ ready: nextReady, last_seen_at: new Date().toISOString() })
-            .eq("room_id", room.id)
-            .eq("session_token", session.sessionToken);
-          if (nextReady) await attemptAdvance();
-          return;
-        }
+  const closeRoom = useCallback(async () => {
+    if (!client || !session || !state.room) return;
+    if (!session.hostToken) { toast("error", t("cmd.error.close_not_host")); return; }
+    const { data, error } = await client.rpc("close_room", { p_room: state.room.id });
+    if (error) { toast("error", t("cmd.error.network", { message: error.message })); return; }
+    if (data !== true) toast("error", t("cmd.error.close_not_host"));
+  }, [client, session, state.room, t, toast]);
 
-        case "leave": {
-          await client.from("room_participants")
-            .delete()
-            .eq("room_id", room.id)
-            .eq("session_token", session.sessionToken);
-          clearSession(room.slug);
-          appendLine("success", t("cmd.success.left"));
-          window.setTimeout(() => { window.location.href = "/"; }, 800);
-          return;
-        }
+  const copyBriefMarkdown = useCallback(() => {
+    const md = buildBriefMarkdown(state);
+    navigator.clipboard.writeText(md)
+      .then(() => toast("success", t("cmd.success.copied")))
+      .catch(() => {});
+  }, [state, t, toast]);
 
-        case "close": {
-          if (!session.hostToken) {
-            appendLine("error", t("cmd.error.close_not_host"));
-            return;
-          }
-          const { data, error } = await client.rpc("close_room", { p_room: room.id });
-          if (error) {
-            appendLine("error", t("cmd.error.network", { message: error.message }));
-            return;
-          }
-          if (data !== true) {
-            appendLine("error", t("cmd.error.close_not_host"));
-          }
-          return;
-        }
-
-        case "idea": {
-          if (!requirePhase(["brainstorm"])) return;
-          if (args[0] === "rm") {
-            const id = args[1];
-            if (!id) { appendLine("error", t("cmd.error.idea_required")); return; }
-            const idea = findIdeaByShort(state, id);
-            if (!idea) { appendLine("error", t("cmd.error.idea_not_found", { id })); return; }
-            if (idea.session_token !== session.sessionToken) {
-              appendLine("error", t("cmd.error.idea_not_yours"));
-              return;
-            }
-            await client.from("room_ideas").delete().eq("id", idea.id);
-            return;
-          }
-          const text = args.join(" ").trim();
-          if (!text) { appendLine("error", t("cmd.error.idea_required")); return; }
-          if (text.length > 280) { appendLine("error", t("cmd.error.idea_too_long")); return; }
-          const { error } = await client.from("room_ideas").insert({
-            room_id: room.id,
-            session_token: session.sessionToken,
-            handle: session.handle!,
-            text,
-          });
-          if (error) {
-            if (/idea_per_session_limit|idea_limit|23514/.test(error.message)) {
-              appendLine("error", t("cmd.error.idea_limit"));
-            } else {
-              appendLine("error", t("cmd.error.network", { message: error.message }));
-            }
-          }
-          return;
-        }
-
-        case "vote":
-        case "unvote": {
-          if (!requirePhase(["pick_two", "pick_winner"])) return;
-          const id = args[0];
-          if (!id) { appendLine("error", t("cmd.error.vote_required")); return; }
-          const idea = findIdeaByShort(state, id);
-          if (!idea) { appendLine("error", t("cmd.error.idea_not_found", { id })); return; }
-          if (phase === "pick_winner" && !room.picked_idea_ids.includes(idea.id)) {
-            appendLine("error", t("cmd.error.vote_invalid"));
-            return;
-          }
-          if (cmd === "vote") {
-            const { error } = await client.from("room_votes").insert({
-              room_id: room.id,
-              session_token: session.sessionToken,
-              idea_id: idea.id,
-              phase,
-            });
-            if (error) {
-              if (/vote.+limit|23514/.test(error.message)) {
-                appendLine("error", t("cmd.error.vote_limit"));
-              } else if (error.code === "23505") {
-                // already voted — silent no-op
-              } else {
-                appendLine("error", t("cmd.error.network", { message: error.message }));
-              }
-            }
-          } else {
-            const existing = state.votes.find(
-              (v) => v.session_token === session.sessionToken && v.idea_id === idea.id && v.phase === phase
-            );
-            if (!existing) {
-              appendLine("error", t("cmd.error.unvote_not_found", { id }));
-              return;
-            }
-            await client.from("room_votes")
-              .delete()
-              .eq("room_id", room.id)
-              .eq("session_token", session.sessionToken)
-              .eq("idea_id", idea.id)
-              .eq("phase", phase);
-          }
-          return;
-        }
-
-        case "assess": {
-          if (!requirePhase(["assess"])) return;
-          // Parse: assess <idea-id> <feasibility|sota> <yes|no|maybe> [--note "..."]
-          if (args.length < 3) { appendLine("error", t("cmd.error.assess_usage")); return; }
-          const idea = findIdeaByShort(state, args[0]);
-          if (!idea) { appendLine("error", t("cmd.error.idea_not_found", { id: args[0] })); return; }
-          if (!room.picked_idea_ids.includes(idea.id)) {
-            appendLine("error", t("cmd.error.assess_idea_invalid"));
-            return;
-          }
-          const kindArg = args[1].toLowerCase();
-          let kind: AssessmentKind;
-          if (kindArg === "feasibility" || kindArg === "f") kind = "feasibility";
-          else if (kindArg === "sota" || kindArg === "state_of_the_art" || kindArg === "s") kind = "state_of_the_art";
-          else { appendLine("error", t("cmd.error.assess_usage")); return; }
-          const verdictArg = args[2].toLowerCase();
-          if (verdictArg !== "yes" && verdictArg !== "no" && verdictArg !== "maybe") {
-            appendLine("error", t("cmd.error.assess_usage"));
-            return;
-          }
-          const verdict = verdictArg as Verdict;
-          // Optional --note "..."
-          let note: string | null = null;
-          const noteIdx = args.indexOf("--note");
-          if (noteIdx >= 0 && args.length > noteIdx + 1) {
-            // Join the rest, strip surrounding quotes if present.
-            const rest = args.slice(noteIdx + 1).join(" ");
-            note = rest.replace(/^["']|["']$/g, "").slice(0, 280);
-          }
-          // Upsert: delete then insert (Supabase JS doesn't accept onConflict on unique 4-col combo easily).
-          await client.from("room_assessments")
-            .delete()
-            .eq("room_id", room.id)
-            .eq("idea_id", idea.id)
-            .eq("kind", kind)
-            .eq("session_token", session.sessionToken);
-          const { error } = await client.from("room_assessments").insert({
-            room_id: room.id,
-            idea_id: idea.id,
-            kind,
-            session_token: session.sessionToken,
-            verdict,
-            note,
-          });
-          if (error) appendLine("error", t("cmd.error.network", { message: error.message }));
-          return;
-        }
-
-        case "persona": {
-          if (!requirePhase(["persona"])) return;
-          if (args.length < 2) { appendLine("error", t("cmd.error.persona_usage")); return; }
-          const field = args[0].toLowerCase();
-          if (field !== "who" && field !== "context" && field !== "pain") {
-            appendLine("error", t("cmd.error.persona_usage"));
-            return;
-          }
-          const value = args.slice(1).join(" ").trim().slice(0, 280);
-          if (!value) { appendLine("error", t("cmd.error.persona_usage")); return; }
-          const next: Partial<Persona> = { [field]: value, updated_at: new Date().toISOString() };
-          const base = state.persona ?? {
-            room_id: room.id,
-            idea_id: room.winner_idea_id,
-            who: null,
-            context: null,
-            pain: null,
-            updated_at: new Date().toISOString(),
-          };
-          await client.from("room_personas").upsert(
-            { ...base, ...next, room_id: room.id },
-            { onConflict: "room_id" }
-          );
-          appendLine("info", t("stream.persona_set", { handle: "@" + session.handle!, field, value }));
-          return;
-        }
-
-        case "scope": {
-          if (!requirePhase(["scope"])) return;
-          if (args[0] === "rm") {
-            const bucket = args[1]?.toLowerCase();
-            const n = parseInt(args[2] ?? "", 10);
-            if (!bucket || isNaN(n)) { appendLine("error", t("cmd.error.scope_usage")); return; }
-            const col = bucketColumn(bucket);
-            if (!col) { appendLine("error", t("cmd.error.scope_usage")); return; }
-            const current = state.scope ? state.scope[col] : [];
-            if (n < 1 || n > current.length) {
-              appendLine("error", t("cmd.error.scope_index"));
-              return;
-            }
-            const updated = current.slice(0, n - 1).concat(current.slice(n));
-            const base = state.scope ?? {
-              room_id: room.id,
-              must_have: [],
-              nice_to_have: [],
-              out_of_scope: [],
-              updated_at: new Date().toISOString(),
-            };
-            await client.from("room_scopes").upsert(
-              { ...base, [col]: updated, room_id: room.id, updated_at: new Date().toISOString() },
-              { onConflict: "room_id" }
-            );
-            appendLine("muted", t("stream.scope_removed", { handle: "@" + session.handle!, bucket, n }));
-            return;
-          }
-          const bucket = args[0]?.toLowerCase();
-          const col = bucketColumn(bucket ?? "");
-          if (!col) { appendLine("error", t("cmd.error.scope_usage")); return; }
-          const value = args.slice(1).join(" ").trim().slice(0, 280);
-          if (!value) { appendLine("error", t("cmd.error.scope_usage")); return; }
-          const current = state.scope ? state.scope[col] : [];
-          const base = state.scope ?? {
-            room_id: room.id,
-            must_have: [],
-            nice_to_have: [],
-            out_of_scope: [],
-            updated_at: new Date().toISOString(),
-          };
-          await client.from("room_scopes").upsert(
-            { ...base, [col]: current.concat(value), room_id: room.id, updated_at: new Date().toISOString() },
-            { onConflict: "room_id" }
-          );
-          appendLine("info", t("stream.scope_added", { handle: "@" + session.handle!, bucket: bucket ?? "", value }));
-          return;
-        }
-
-        default:
-          appendLine("error", t("cmd.error.unknown", { cmd }));
-          appendLine("muted", t("cmd.error.hint"));
-      }
-    } catch (e: any) {
-      appendLine("error", t("cmd.error.network", { message: e?.message ?? String(e) }));
-    }
-  }, [client, session, state, t, appendLine, attemptAdvance]);
-
-  // -------- 5. Stream auto-scroll
-
-  useEffect(() => {
-    const el = streamRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [state.stream.length]);
-
-  // -------- 6. Keyboard handling on the brief screen
-
-  useEffect(() => {
-    if (state.room?.phase !== "done") return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "c" || e.key === "C") {
-        const md = buildBriefMarkdown(state);
-        navigator.clipboard.writeText(md).then(() => {
-          appendLine("success", t("cmd.success.copied"));
-        }).catch(() => {});
-      } else if (e.key === "Enter") {
-        clearSession(state.room!.slug);
-        window.location.href = "/";
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [state, t, appendLine]);
-
-  // -------- 7. Render
+  // ----- Render
 
   if (phaseStatus === "loading") {
     return <div className="room-shell"><div className="room-muted">{t("loading")}</div></div>;
@@ -936,250 +638,624 @@ export default function RoomTerminal() {
     );
   }
 
-  // Onboarding (no handle yet)
   if (!session?.handle) {
-    const shareUrl = typeof window !== "undefined" ? window.location.href : "";
-    const aliveCountValue = aliveCount(state);
-    const totalParticipants = state.participants.size;
     return (
-      <div className="room-shell room-onboarding">
-        <div className="room-banner">
-          <pre className="room-banner-art">{`╔══════════════════════════════════════════════════════╗
-║                                                      ║
-║  ROOM ${(slug ?? "").padEnd(46, " ")} ║
-║  ${t("subtitle").padEnd(52, " ")}║
-║                                                      ║
-╚══════════════════════════════════════════════════════╝`}</pre>
-        </div>
-        <div className="room-onboard">
-          <div className="room-line room-onboard-heading">{t("onboard.heading")}</div>
-          {totalParticipants > 0 && (
-            <div className="room-line room-muted">
-              {t("status.quorum", { ready: 0, total: aliveCountValue })} · {Array.from(state.participants.values()).map((p) => "@" + p.handle).join(", ")}
-            </div>
-          )}
-          <form
-            className="room-onboard-form"
-            onSubmit={(e) => { e.preventDefault(); onJoin(pendingHandle); }}
-          >
-            <span className="room-prompt-tag">{t("onboard.handle_prompt")}</span>
-            <input
-              autoFocus
-              type="text"
-              maxLength={32}
-              placeholder="aiponce"
-              value={pendingHandle}
-              onChange={(e) => setPendingHandle(e.target.value)}
-              className="room-input room-onboard-input"
-            />
-            <button type="submit" className="room-btn">[ {t("onboard.cta")} ]</button>
-          </form>
-          {pendingHandleError && <div className="room-line room-error">{pendingHandleError}</div>}
-          <div className="room-line room-muted room-onboard-share">{t("onboard.share", { url: shareUrl })}</div>
-        </div>
-        <a className="room-back" href="/">{t("back_to_main")}</a>
-      </div>
+      <OnboardView
+        slug={slug ?? ""}
+        t={t}
+        state={state}
+        pendingHandle={pendingHandle}
+        setPendingHandle={setPendingHandle}
+        pendingHandleError={pendingHandleError}
+        onJoin={onJoin}
+      />
     );
   }
 
-  // Main room view
+  const phase = state.room?.phase ?? "brainstorm";
+  const me = state.participants.get(session.sessionToken);
+  const isHost = !!session.hostToken;
+
   return (
     <div className="room-shell room-active">
-      <div className="room-header">
-        <span className="room-title">{t("title")} / {state.room?.slug}</span>
-        <span className="room-sub">{t("subtitle")}</span>
-        <span className="room-status">
-          <span className={connected ? "room-live" : "room-reconnecting"}>
-            {connected ? t("status.live") : t("status.reconnecting")}
-          </span>
-          {state.room?.expires_at && (
-            <span className="room-muted">
-              {" · "}{t("status.expires_in", { mins: Math.max(0, Math.round((new Date(state.room.expires_at).getTime() - Date.now()) / 60000)) })}
-            </span>
-          )}
-        </span>
-      </div>
+      <RoomHeader
+        slug={state.room?.slug ?? ""}
+        phase={phase}
+        connected={connected}
+        ready={me?.ready ?? false}
+        readyCount={readyAliveCount(state)}
+        totalCount={aliveCount(state)}
+        expiresAt={state.room?.expires_at ?? null}
+        isHost={isHost}
+        t={t}
+        onToggleReady={toggleReady}
+        onLeave={leaveRoom}
+        onClose={closeRoom}
+      />
+      <ParticipantsStrip state={state} sessionToken={session.sessionToken} />
+      <Toasts stream={state.stream} />
 
-      {state.room?.phase === "done" ? (
-        <BriefView state={state} t={t} />
-      ) : (
-        <div className="room-body">
-          <div className="room-main">
-            <div className="room-stream" ref={streamRef}>
-              {state.stream.map((line) => (
-                <div key={line.id} className={`room-line room-line-${line.kind}`}>{line.text}</div>
-              ))}
-            </div>
-            <form
-              className="room-prompt-row"
-              onSubmit={(e) => { e.preventDefault(); const v = input; setInput(""); runCommand(v); }}
-            >
-              <span className="room-prompt-tag">
-                @{session.handle}@{state.room?.slug}:{t("phase." + (state.room?.phase ?? "brainstorm"))}$
-              </span>
-              <input
-                ref={inputRef}
-                type="text"
-                autoFocus
-                className="room-input"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-              />
-            </form>
-          </div>
-          <RoomSidebar state={state} t={t} session={session} />
-        </div>
+      {phase === "brainstorm" && (
+        <BrainstormView
+          state={state}
+          sessionToken={session.sessionToken}
+          t={t}
+          onAdd={addIdea}
+          onRemove={removeIdea}
+        />
+      )}
+      {(phase === "pick_two" || phase === "pick_winner") && (
+        <PickView
+          state={state}
+          phase={phase}
+          sessionToken={session.sessionToken}
+          t={t}
+          onToggleVote={toggleVote}
+        />
+      )}
+      {phase === "assess" && (
+        <AssessView
+          state={state}
+          sessionToken={session.sessionToken}
+          t={t}
+          onSetAssessment={setAssessment}
+        />
+      )}
+      {phase === "persona" && (
+        <PersonaView state={state} t={t} onSet={setPersonaField} />
+      )}
+      {phase === "scope" && (
+        <ScopeView state={state} t={t} onAdd={addScopeItem} onRemove={removeScopeItem} />
+      )}
+      {phase === "done" && (
+        <DoneView state={state} t={t} onCopy={copyBriefMarkdown} onLeave={leaveRoom} />
       )}
     </div>
   );
 }
 
-// ---------- Subcomponents ----------
+// ---------- Subviews ----------
 
-function bucketColumn(bucket: string): "must_have" | "nice_to_have" | "out_of_scope" | null {
-  if (bucket === "must") return "must_have";
-  if (bucket === "nice") return "nice_to_have";
-  if (bucket === "out") return "out_of_scope";
-  return null;
+function OnboardView({
+  slug, t, state, pendingHandle, setPendingHandle, pendingHandleError, onJoin,
+}: {
+  slug: string;
+  t: ReturnType<typeof makeT>;
+  state: RoomState;
+  pendingHandle: string;
+  setPendingHandle: (v: string) => void;
+  pendingHandleError: string | null;
+  onJoin: (h: string) => void | Promise<void>;
+}) {
+  const shareUrl = typeof window !== "undefined" ? window.location.href : "";
+  const others = Array.from(state.participants.values());
+  return (
+    <div className="room-shell room-onboarding">
+      <div className="room-banner">
+        <pre className="room-banner-art">{`╔══════════════════════════════════════════════════════╗
+║                                                      ║
+║  ROOM ${slug.padEnd(46, " ")} ║
+║  ${t("subtitle").padEnd(52, " ")}║
+║                                                      ║
+╚══════════════════════════════════════════════════════╝`}</pre>
+      </div>
+      <div className="room-onboard">
+        <div className="room-line room-onboard-heading">{t("onboard.heading")}</div>
+        {others.length > 0 && (
+          <div className="room-line room-muted">
+            {others.map((p) => "@" + p.handle).join(", ")}
+          </div>
+        )}
+        <form className="room-onboard-form" onSubmit={(e) => { e.preventDefault(); onJoin(pendingHandle); }}>
+          <span className="room-prompt-tag">{t("onboard.handle_prompt")}</span>
+          <input
+            autoFocus
+            type="text"
+            maxLength={32}
+            placeholder="aiponce"
+            value={pendingHandle}
+            onChange={(e) => setPendingHandle(e.target.value)}
+            className="room-input room-onboard-input"
+          />
+          <button type="submit" className="room-btn room-btn-primary">[ {t("onboard.cta")} ]</button>
+        </form>
+        {pendingHandleError && <div className="room-line room-error">{pendingHandleError}</div>}
+        <div className="room-line room-muted room-onboard-share">{t("onboard.share", { url: shareUrl })}</div>
+      </div>
+      <a className="room-back" href="/">{t("back_to_main")}</a>
+    </div>
+  );
 }
 
-function aliveCount(state: RoomState): number {
-  const cutoff = Date.now() - 60_000;
-  let n = 0;
-  for (const p of state.participants.values()) {
-    if (new Date(p.last_seen_at).getTime() > cutoff) n++;
-  }
-  return n;
+function RoomHeader({
+  slug, phase, connected, ready, readyCount, totalCount, expiresAt, isHost,
+  t, onToggleReady, onLeave, onClose,
+}: {
+  slug: string;
+  phase: Phase;
+  connected: boolean;
+  ready: boolean;
+  readyCount: number;
+  totalCount: number;
+  expiresAt: string | null;
+  isHost: boolean;
+  t: ReturnType<typeof makeT>;
+  onToggleReady: () => void;
+  onLeave: () => void;
+  onClose: () => void;
+}) {
+  const mins = expiresAt ? Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 60000)) : 0;
+  return (
+    <header className="room-header2">
+      <div className="room-header-left">
+        <div className="room-title-row">
+          <span className="room-title">room / {slug}</span>
+          <span className={connected ? "room-live" : "room-reconnecting"}>
+            {connected ? t("status.live") : t("status.reconnecting")}
+          </span>
+        </div>
+        <div className="room-meta-row">
+          <span className="room-phase-pill">{t("status.phase", { phase: t("phase." + phase) })}</span>
+          <span className="room-muted">·</span>
+          <span className="room-muted">{t("status.quorum", { ready: readyCount, total: totalCount })}</span>
+          {expiresAt && (
+            <>
+              <span className="room-muted">·</span>
+              <span className="room-muted">{t("status.expires_in", { mins })}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="room-header-right">
+        {phase !== "done" && (
+          <button
+            type="button"
+            className={`room-btn room-btn-ready ${ready ? "is-ready" : ""}`}
+            onClick={onToggleReady}
+          >
+            [ {ready ? "✓ ready" : "ready"} ]
+          </button>
+        )}
+        {isHost && phase !== "done" && (
+          <button type="button" className="room-btn" onClick={onClose} title={t("help.line.close")}>
+            [ close ]
+          </button>
+        )}
+        <button type="button" className="room-btn room-btn-quiet" onClick={onLeave}>
+          [ leave ]
+        </button>
+      </div>
+    </header>
+  );
 }
 
-function readyAliveCount(state: RoomState): number {
-  const cutoff = Date.now() - 60_000;
-  let n = 0;
-  for (const p of state.participants.values()) {
-    if (p.ready && new Date(p.last_seen_at).getTime() > cutoff) n++;
-  }
-  return n;
+function ParticipantsStrip({ state, sessionToken }: { state: RoomState; sessionToken: string }) {
+  const ps = Array.from(state.participants.values()).sort((a, b) => a.handle.localeCompare(b.handle));
+  return (
+    <div className="room-participants">
+      {ps.map((p) => {
+        const alive = new Date(p.last_seen_at).getTime() > Date.now() - 60_000;
+        const isMe = p.session_token === sessionToken;
+        return (
+          <span
+            key={p.session_token}
+            className={`room-chip ${alive ? "" : "is-stale"} ${p.ready ? "is-ready" : ""} ${isMe ? "is-me" : ""}`}
+            title={isMe ? "you" : ""}
+          >
+            {p.ready ? "✓ " : ""}@{p.handle}{isMe ? " *" : ""}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
-function RoomSidebar({
-  state,
-  t,
-  session,
+function Toasts({ stream }: { stream: StreamLine[] }) {
+  const visible = stream.filter((s) => s.text);
+  if (visible.length === 0) return null;
+  return (
+    <div className="room-toasts">
+      {visible.slice(-3).map((s) => (
+        <div key={s.id} className={`room-toast room-line-${s.kind}`}>{s.text}</div>
+      ))}
+    </div>
+  );
+}
+
+function BrainstormView({
+  state, sessionToken, t, onAdd, onRemove,
 }: {
   state: RoomState;
+  sessionToken: string;
   t: ReturnType<typeof makeT>;
-  session: SessionData;
+  onAdd: (text: string) => void | Promise<void>;
+  onRemove: (idea: Idea) => void | Promise<void>;
 }) {
-  const phase = state.room?.phase ?? "brainstorm";
-  const total = aliveCount(state);
-  const ready = readyAliveCount(state);
-  const voteCounts = new Map<string, number>();
-  for (const v of state.votes) {
-    if (v.phase === phase || (phase === "assess" && v.phase === "pick_two")) {
-      voteCounts.set(v.idea_id, (voteCounts.get(v.idea_id) ?? 0) + 1);
-    }
-  }
-  const sortedIdeas = Array.from(state.ideas.values()).sort(
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const sorted = Array.from(state.ideas.values()).sort(
     (a, b) => a.created_at.localeCompare(b.created_at)
   );
 
+  useEffect(() => {
+    // Auto-scroll on new ideas.
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [sorted.length]);
+
   return (
-    <aside className="room-side">
-      <div className="room-side-section">
-        <div className="room-side-h">{t("status.phase", { phase: t("phase." + phase) })}</div>
-        <div className="room-muted">{t("status.quorum", { ready, total })}</div>
+    <div className="phase-pane">
+      <div className="phase-instructions">
+        <strong>{t("phase.brainstorm")}</strong> — {t("help.line.idea").trim().replace(/^idea\s+/, "")}
       </div>
-      <div className="room-side-section">
-        <div className="room-side-h">{t("panel.roster")}</div>
-        {Array.from(state.participants.values())
-          .sort((a, b) => a.handle.localeCompare(b.handle))
-          .map((p) => {
-            const alive = new Date(p.last_seen_at).getTime() > Date.now() - 60_000;
-            const tag = p.session_token === session.sessionToken ? " (you)" : "";
-            return (
-              <div key={p.session_token} className={`room-side-row ${alive ? "" : "room-muted"}`}>
-                <span>{p.ready ? "✓" : "·"}</span>
-                <span>@{p.handle}{tag}</span>
-              </div>
-            );
-          })}
-      </div>
-      <div className="room-side-section">
-        <div className="room-side-h">{t("panel.ideas")}</div>
-        {sortedIdeas.length === 0 && <div className="room-muted">{t("panel.no_ideas")}</div>}
-        {sortedIdeas.map((i) => {
-          const c = voteCounts.get(i.id) ?? 0;
-          const isPicked = state.room?.picked_idea_ids?.includes(i.id);
-          const isWinner = state.room?.winner_idea_id === i.id;
+      <div className="msg-list" ref={listRef}>
+        {sorted.length === 0 && <div className="room-muted msg-empty">{t("panel.no_ideas")}</div>}
+        {sorted.map((i) => {
+          const mine = i.session_token === sessionToken;
           return (
-            <div key={i.id} className="room-side-row">
-              <span className="room-mono">#{shortId(i.id)}</span>
-              <span className="room-idea-text">
-                {isWinner ? "🏆 " : isPicked ? "★ " : ""}{i.text}
-              </span>
-              {c > 0 && <span className="room-muted">({c})</span>}
+            <div key={i.id} className={`msg ${mine ? "msg-mine" : ""}`}>
+              <div className="msg-meta">
+                <span className="msg-handle">@{i.handle}</span>
+                <span className="room-muted msg-time">· {relTime(i.created_at)}</span>
+                <span className="room-muted msg-id">· #{shortId(i.id)}</span>
+                {mine && (
+                  <button type="button" className="room-btn room-btn-tiny msg-remove" onClick={() => onRemove(i)} title="remove">
+                    [×]
+                  </button>
+                )}
+              </div>
+              <div className="msg-body">{i.text}</div>
             </div>
           );
         })}
       </div>
-      {(phase === "persona" || phase === "scope" || phase === "done") && state.persona && (
-        <div className="room-side-section">
-          <div className="room-side-h">{t("panel.persona")}</div>
-          {state.persona.who && <div className="room-side-row"><span className="room-muted">{t("brief.persona_who")}:</span><span>{state.persona.who}</span></div>}
-          {state.persona.context && <div className="room-side-row"><span className="room-muted">{t("brief.persona_context")}:</span><span>{state.persona.context}</span></div>}
-          {state.persona.pain && <div className="room-side-row"><span className="room-muted">{t("brief.persona_pain")}:</span><span>{state.persona.pain}</span></div>}
-        </div>
-      )}
-      {(phase === "scope" || phase === "done") && state.scope && (
-        <div className="room-side-section">
-          <div className="room-side-h">{t("panel.scope")}</div>
-          {state.scope.must_have.length > 0 && (
-            <>
-              <div className="room-muted">{t("panel.scope_must")}</div>
-              {state.scope.must_have.map((s, i) => (
-                <div key={i} className="room-side-row">{i + 1}. {s}</div>
-              ))}
-            </>
-          )}
-          {state.scope.nice_to_have.length > 0 && (
-            <>
-              <div className="room-muted">{t("panel.scope_nice")}</div>
-              {state.scope.nice_to_have.map((s, i) => (
-                <div key={i} className="room-side-row">{i + 1}. {s}</div>
-              ))}
-            </>
-          )}
-          {state.scope.out_of_scope.length > 0 && (
-            <>
-              <div className="room-muted">{t("panel.scope_out")}</div>
-              {state.scope.out_of_scope.map((s, i) => (
-                <div key={i} className="room-side-row">{i + 1}. {s}</div>
-              ))}
-            </>
-          )}
-        </div>
-      )}
-    </aside>
+      <form
+        className="composer"
+        onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { onAdd(draft); setDraft(""); inputRef.current?.focus(); } }}
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          maxLength={280}
+          placeholder={t("composer.idea_placeholder")}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className="room-input composer-input"
+          autoFocus
+        />
+        <button type="submit" className="room-btn room-btn-primary" disabled={!draft.trim()}>
+          [ {t("composer.add")} ]
+        </button>
+      </form>
+    </div>
   );
 }
 
-function BriefView({
-  state,
-  t,
+function PickView({
+  state, phase, sessionToken, t, onToggleVote,
+}: {
+  state: RoomState;
+  phase: "pick_two" | "pick_winner";
+  sessionToken: string;
+  t: ReturnType<typeof makeT>;
+  onToggleVote: (i: Idea, p: "pick_two" | "pick_winner") => void | Promise<void>;
+}) {
+  // pick_winner shows only picked ideas; pick_two shows all.
+  const candidates = Array.from(state.ideas.values())
+    .filter((i) => phase === "pick_two" ? true : state.room?.picked_idea_ids?.includes(i.id))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+  const votesByIdea = new Map<string, number>();
+  const myVotes = new Set<string>();
+  for (const v of state.votes) {
+    if (v.phase !== phase) continue;
+    votesByIdea.set(v.idea_id, (votesByIdea.get(v.idea_id) ?? 0) + 1);
+    if (v.session_token === sessionToken) myVotes.add(v.idea_id);
+  }
+  const myVoteCount = myVotes.size;
+  const cap = phase === "pick_two" ? 2 : 1;
+
+  return (
+    <div className="phase-pane">
+      <div className="phase-instructions">
+        <strong>{t("phase." + phase)}</strong> —{" "}
+        {phase === "pick_two" ? t("composer.pick_two_help") : t("composer.pick_winner_help")}{" "}
+        ({myVoteCount}/{cap})
+      </div>
+      <div className="msg-list">
+        {candidates.length === 0 && <div className="room-muted msg-empty">{t("panel.no_ideas")}</div>}
+        {candidates.map((i) => {
+          const c = votesByIdea.get(i.id) ?? 0;
+          const voted = myVotes.has(i.id);
+          const canVote = voted || myVoteCount < cap;
+          return (
+            <div key={i.id} className={`msg ${voted ? "msg-voted" : ""}`}>
+              <div className="msg-meta">
+                <span className="msg-handle">@{i.handle}</span>
+                <span className="room-muted msg-time">· {relTime(i.created_at)}</span>
+                <span className="room-muted msg-id">· #{shortId(i.id)}</span>
+                <span className="msg-actions">
+                  <button
+                    type="button"
+                    className={`room-btn room-btn-tiny ${voted ? "is-active" : ""}`}
+                    disabled={!canVote}
+                    onClick={() => onToggleVote(i, phase)}
+                  >
+                    [ {voted ? "★ voted" : "vote"} ]
+                  </button>
+                  <span className="room-muted msg-votes">{c} {c === 1 ? "vote" : "votes"}</span>
+                </span>
+              </div>
+              <div className="msg-body">{i.text}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AssessView({
+  state, sessionToken, t, onSetAssessment,
+}: {
+  state: RoomState;
+  sessionToken: string;
+  t: ReturnType<typeof makeT>;
+  onSetAssessment: (i: Idea, k: AssessmentKind, v: Verdict, note?: string | null) => void | Promise<void>;
+}) {
+  const picked = (state.room?.picked_idea_ids ?? [])
+    .map((id) => state.ideas.get(id))
+    .filter((x): x is Idea => !!x);
+
+  return (
+    <div className="phase-pane">
+      <div className="phase-instructions">
+        <strong>{t("phase.assess")}</strong> — {t("composer.assess_help")}
+      </div>
+      <div className="msg-list">
+        {picked.map((idea) => (
+          <AssessCard
+            key={idea.id}
+            idea={idea}
+            state={state}
+            sessionToken={sessionToken}
+            t={t}
+            onSetAssessment={onSetAssessment}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AssessCard({
+  idea, state, sessionToken, t, onSetAssessment,
+}: {
+  idea: Idea;
+  state: RoomState;
+  sessionToken: string;
+  t: ReturnType<typeof makeT>;
+  onSetAssessment: (i: Idea, k: AssessmentKind, v: Verdict, note?: string | null) => void | Promise<void>;
+}) {
+  return (
+    <div className="msg msg-picked">
+      <div className="msg-meta">
+        <span className="msg-handle">@{idea.handle}</span>
+        <span className="room-muted msg-id">· #{shortId(idea.id)}</span>
+        <span className="msg-actions">
+          <span className="msg-pill">★ {t("composer.assess_picked_tag")}</span>
+        </span>
+      </div>
+      <div className="msg-body msg-body-large">{idea.text}</div>
+      <AssessRow
+        idea={idea}
+        kind="feasibility"
+        label={t("brief.assess_feasibility")}
+        state={state}
+        sessionToken={sessionToken}
+        onSetAssessment={onSetAssessment}
+      />
+      <AssessRow
+        idea={idea}
+        kind="state_of_the_art"
+        label={t("brief.assess_sota")}
+        state={state}
+        sessionToken={sessionToken}
+        onSetAssessment={onSetAssessment}
+      />
+    </div>
+  );
+}
+
+function AssessRow({
+  idea, kind, label, state, sessionToken, onSetAssessment,
+}: {
+  idea: Idea;
+  kind: AssessmentKind;
+  label: string;
+  state: RoomState;
+  sessionToken: string;
+  onSetAssessment: (i: Idea, k: AssessmentKind, v: Verdict, note?: string | null) => void | Promise<void>;
+}) {
+  const mine = Array.from(state.assessments.values()).find(
+    (a) => a.idea_id === idea.id && a.kind === kind && a.session_token === sessionToken
+  );
+  const tally = { yes: 0, no: 0, maybe: 0 };
+  const notes: string[] = [];
+  for (const a of state.assessments.values()) {
+    if (a.idea_id === idea.id && a.kind === kind) {
+      tally[a.verdict] += 1;
+      if (a.note) notes.push(`"${a.note}"`);
+    }
+  }
+  const [noteDraft, setNoteDraft] = useState(mine?.note ?? "");
+  useEffect(() => { setNoteDraft(mine?.note ?? ""); }, [mine?.id, mine?.note]);
+
+  const choose = (v: Verdict) => onSetAssessment(idea, kind, v, noteDraft || null);
+  const saveNote = () => {
+    if (mine) onSetAssessment(idea, kind, mine.verdict, noteDraft || null);
+  };
+
+  return (
+    <div className="assess-row">
+      <div className="assess-row-label">{label}</div>
+      <div className="assess-row-actions">
+        {(["yes", "maybe", "no"] as Verdict[]).map((v) => (
+          <button
+            key={v}
+            type="button"
+            className={`room-btn room-btn-tiny ${mine?.verdict === v ? "is-active" : ""}`}
+            onClick={() => choose(v)}
+          >
+            [ {v} ]
+          </button>
+        ))}
+        <input
+          type="text"
+          maxLength={280}
+          placeholder="note (optional)"
+          value={noteDraft}
+          onChange={(e) => setNoteDraft(e.target.value)}
+          onBlur={saveNote}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveNote(); } }}
+          className="room-input assess-note"
+        />
+      </div>
+      <div className="assess-row-tally room-muted">
+        {tally.yes} yes / {tally.maybe} maybe / {tally.no} no
+        {notes.length > 0 && <span className="assess-notes"> — {notes.join(", ")}</span>}
+      </div>
+    </div>
+  );
+}
+
+function PersonaView({
+  state, t, onSet,
 }: {
   state: RoomState;
   t: ReturnType<typeof makeT>;
+  onSet: (f: "who" | "context" | "pain", v: string) => void | Promise<void>;
+}) {
+  const winner = state.room?.winner_idea_id ? state.ideas.get(state.room.winner_idea_id) : null;
+  return (
+    <div className="phase-pane">
+      <div className="phase-instructions">
+        <strong>{t("phase.persona")}</strong> — {t("composer.persona_help")}
+      </div>
+      {winner && (
+        <div className="winner-banner">
+          <span className="msg-pill">🏆 {t("brief.winner_label").replace(/^[^A-Z]+/, "")}</span>
+          <span className="winner-text">{winner.text}</span>
+        </div>
+      )}
+      <PersonaField label={t("brief.persona_who")} value={state.persona?.who ?? ""} onSave={(v) => onSet("who", v)} />
+      <PersonaField label={t("brief.persona_context")} value={state.persona?.context ?? ""} onSave={(v) => onSet("context", v)} />
+      <PersonaField label={t("brief.persona_pain")} value={state.persona?.pain ?? ""} onSave={(v) => onSet("pain", v)} />
+    </div>
+  );
+}
+
+function PersonaField({ label, value, onSave }: { label: string; value: string; onSave: (v: string) => void | Promise<void> }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  const dirty = draft !== value;
+  const submit = () => { if (dirty) onSave(draft); };
+  return (
+    <div className="persona-field">
+      <label className="persona-label">{label}</label>
+      <div className="persona-row">
+        <input
+          type="text"
+          maxLength={280}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={submit}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }}
+          className="room-input persona-input"
+        />
+        <button type="button" className="room-btn room-btn-tiny" disabled={!dirty} onClick={submit}>[ save ]</button>
+      </div>
+    </div>
+  );
+}
+
+function ScopeView({
+  state, t, onAdd, onRemove,
+}: {
+  state: RoomState;
+  t: ReturnType<typeof makeT>;
+  onAdd: (b: "must_have" | "nice_to_have" | "out_of_scope", v: string) => void | Promise<void>;
+  onRemove: (b: "must_have" | "nice_to_have" | "out_of_scope", i: number) => void | Promise<void>;
+}) {
+  return (
+    <div className="phase-pane">
+      <div className="phase-instructions">
+        <strong>{t("phase.scope")}</strong> — {t("composer.scope_help")}
+      </div>
+      <div className="scope-grid">
+        <ScopeBucket label={t("brief.scope_must")} items={state.scope?.must_have ?? []} onAdd={(v) => onAdd("must_have", v)} onRemove={(i) => onRemove("must_have", i)} />
+        <ScopeBucket label={t("brief.scope_nice")} items={state.scope?.nice_to_have ?? []} onAdd={(v) => onAdd("nice_to_have", v)} onRemove={(i) => onRemove("nice_to_have", i)} />
+        <ScopeBucket label={t("brief.scope_out")} items={state.scope?.out_of_scope ?? []} onAdd={(v) => onAdd("out_of_scope", v)} onRemove={(i) => onRemove("out_of_scope", i)} />
+      </div>
+    </div>
+  );
+}
+
+function ScopeBucket({
+  label, items, onAdd, onRemove,
+}: {
+  label: string;
+  items: string[];
+  onAdd: (v: string) => void | Promise<void>;
+  onRemove: (i: number) => void | Promise<void>;
+}) {
+  const [draft, setDraft] = useState("");
+  return (
+    <div className="scope-bucket">
+      <div className="scope-bucket-h">{label}</div>
+      <ul className="scope-list">
+        {items.map((it, i) => (
+          <li key={`${i}-${it}`} className="scope-item">
+            <span>{it}</span>
+            <button type="button" className="room-btn room-btn-tiny" onClick={() => onRemove(i)}>[×]</button>
+          </li>
+        ))}
+        {items.length === 0 && <li className="room-muted scope-item-empty">—</li>}
+      </ul>
+      <form
+        className="scope-add"
+        onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { onAdd(draft); setDraft(""); } }}
+      >
+        <input
+          type="text"
+          maxLength={280}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="add…"
+          className="room-input scope-input"
+        />
+        <button type="submit" className="room-btn room-btn-tiny" disabled={!draft.trim()}>[ + ]</button>
+      </form>
+    </div>
+  );
+}
+
+function DoneView({
+  state, t, onCopy, onLeave,
+}: {
+  state: RoomState;
+  t: ReturnType<typeof makeT>;
+  onCopy: () => void;
+  onLeave: () => void;
 }) {
   const { ideas, votes, assessments, room, persona, scope } = state;
   const winner = room?.winner_idea_id ? ideas.get(room.winner_idea_id) : null;
-  const sortedIdeas = Array.from(ideas.values()).sort(
-    (a, b) => a.created_at.localeCompare(b.created_at)
-  );
+  const sortedIdeas = Array.from(ideas.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
   const voteCounts = new Map<string, number>();
   for (const v of votes) {
     if (v.phase === "pick_two") voteCounts.set(v.idea_id, (voteCounts.get(v.idea_id) ?? 0) + 1);
   }
-  // Assessment summaries for picked ideas
   const pickedSummaries = (room?.picked_idea_ids ?? []).map((id) => {
     const idea = ideas.get(id);
     const buckets = {
@@ -1196,7 +1272,7 @@ function BriefView({
   });
 
   return (
-    <div className="room-brief">
+    <div className="phase-pane room-brief">
       <div className="brief-line brief-rule">{t("brief.heading")}</div>
       {winner && (
         <>
@@ -1275,10 +1351,14 @@ function BriefView({
       ) : null}
 
       <div className="brief-line brief-rule">{t("brief.footer")}</div>
-      <div className="brief-line brief-hint">{t("brief.hint_copy")}</div>
-      {state.stream.length > 0 && (
-        <div className="brief-line brief-stream">{state.stream[state.stream.length - 1]?.text}</div>
-      )}
+      <div className="brief-actions">
+        <button type="button" className="room-btn room-btn-primary" onClick={onCopy}>
+          [ {t("composer.copy_markdown")} ]
+        </button>
+        <button type="button" className="room-btn" onClick={onLeave}>
+          [ {t("composer.close_room")} ]
+        </button>
+      </div>
     </div>
   );
 }

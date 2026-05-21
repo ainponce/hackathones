@@ -126,6 +126,17 @@ const EN: RoomDict = {
   "brief.footer": "═════════════════════════════════════",
   "brief.hint_copy": "[c] copy as markdown   [enter] close room",
   "brief.empty": "(nothing here)",
+
+  "composer.idea_placeholder": "type an idea and press enter…",
+  "composer.add": "add",
+  "composer.pick_two_help": "pick the 2 ideas worth exploring (you have 2 votes)",
+  "composer.pick_winner_help": "pick the winner between the two finalists (1 vote)",
+  "composer.assess_help": "for each idea, decide feasibility + state-of-the-art (yes / maybe / no)",
+  "composer.assess_picked_tag": "picked",
+  "composer.persona_help": "describe the target user. who they are, when they need it, what pain you remove.",
+  "composer.scope_help": "what makes it into the prototype, what's nice-to-have, what's explicitly out",
+  "composer.copy_markdown": "copy as markdown",
+  "composer.close_room": "close room",
 };
 
 const ES: RoomDict = {
@@ -245,6 +256,17 @@ const ES: RoomDict = {
   "brief.footer": "═════════════════════════════════════",
   "brief.hint_copy": "[c] copiar como markdown   [enter] cerrar sala",
   "brief.empty": "(vacío)",
+
+  "composer.idea_placeholder": "escribí una idea y apretá enter…",
+  "composer.add": "agregar",
+  "composer.pick_two_help": "elegí las 2 ideas que vale la pena explorar (tenés 2 votos)",
+  "composer.pick_winner_help": "elegí la ganadora entre las 2 finalistas (1 voto)",
+  "composer.assess_help": "para cada idea, decidí factibilidad + estado del arte (sí / quizás / no)",
+  "composer.assess_picked_tag": "elegida",
+  "composer.persona_help": "describí al usuario target. quién es, cuándo lo usa, qué dolor le sacás.",
+  "composer.scope_help": "qué entra en el prototipo, qué sería lindo tener, qué queda fuera explícitamente",
+  "composer.copy_markdown": "copiar como markdown",
+  "composer.close_room": "cerrar sala",
 };
 
 const PT: RoomDict = {
@@ -364,6 +386,17 @@ const PT: RoomDict = {
   "brief.footer": "═════════════════════════════════════",
   "brief.hint_copy": "[c] copiar como markdown   [enter] fechar sala",
   "brief.empty": "(vazio)",
+
+  "composer.idea_placeholder": "escreva uma ideia e aperte enter…",
+  "composer.add": "adicionar",
+  "composer.pick_two_help": "escolha as 2 ideias que valem a pena explorar (você tem 2 votos)",
+  "composer.pick_winner_help": "escolha a vencedora entre as 2 finalistas (1 voto)",
+  "composer.assess_help": "para cada ideia, decida viabilidade + estado da arte (sim / talvez / não)",
+  "composer.assess_picked_tag": "escolhida",
+  "composer.persona_help": "descreva o usuário alvo. quem é, quando usa, qual dor você resolve.",
+  "composer.scope_help": "o que entra no protótipo, o que seria legal ter, o que fica fora",
+  "composer.copy_markdown": "copiar como markdown",
+  "composer.close_room": "fechar sala",
 };
 
 const DICTS: Record<Locale, RoomDict> = { en: EN, es: ES, pt: PT };
