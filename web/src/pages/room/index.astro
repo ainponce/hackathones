@@ -1,0 +1,17 @@
+---
+// Catch-all entry for /room and /room/<slug>. Vercel rewrites
+// `/room/:slug` → `/room` (see vercel.json), so a single static page handles
+// every room URL. The React island reads the slug from window.location.
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import RoomTerminal from "../../components/RoomTerminal.tsx";
+---
+
+<BaseLayout locale="en" title="room — hackathones">
+  <div id="room-root">
+    <RoomTerminal client:only="react" />
+  </div>
+</BaseLayout>
+
+<style is:global>
+  @import "../../styles/room.css";
+</style>

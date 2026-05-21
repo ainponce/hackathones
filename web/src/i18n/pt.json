@@ -14,6 +14,9 @@
   "help.line.lfg": "  lfg <span class=\"muted\">— hackers procurando time</span>",
   "help.line.lfg_hackathon": "  lfg --hackathon &lt;nome&gt; <span class=\"muted\">— filtrar por hackathon</span>",
   "help.line.lfg_post": "  lfg --post <span class=\"muted\">— publicar sua busca por time</span>",
+  "help.line.room": "  room <span class=\"muted\">— sala virtual de brainstorm (processo colaborativo de ideias)</span>",
+  "help.line.room_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— criar uma sala e compartilhar o link</span>",
+  "help.line.room_join": "  room join &lt;slug&gt; <span class=\"muted\">— entrar em uma sala existente</span>",
   "help.line.theme": "  theme <span class=\"muted\">— alternar entre light e dark mode</span>",
   "help.line.theme_set": "  theme &lt;dark|light&gt; <span class=\"muted\">— definir tema explicitamente</span>",
   "help.line.lang": "  lang <span class=\"muted\">— ver idioma atual</span>",
@@ -125,5 +128,14 @@
   "placeholder.hint_2": "digite list para ver hackathons",
   "placeholder.hint_3": "digite lfg para achar time",
   "placeholder.hint_4": "digite theme dark para dark mode",
-  "placeholder.hint_5": "digite submit para enviar um"
+  "placeholder.hint_5": "digite submit para enviar um",
+
+  "room.missing_env": "supabase env faltando; salas nao estao configuradas.",
+  "room.invalid_slug": "slug invalido. exemplo: swift-orca-9k",
+  "room.usage_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— criar uma sala nova</span>",
+  "room.usage_join": "  room join &lt;slug&gt; <span class=\"muted\">— entrar em uma sala existente</span>",
+  "room.created": "sala {slug} criada.",
+  "room.open_link": "abrir: {link}",
+  "room.share_hint": "compartilhe esse link com seu time para entrarem na sala.",
+  "room.create_failed": "nao foi possivel criar a sala: {msg}"
 }

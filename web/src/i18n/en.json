@@ -14,6 +14,9 @@
   "help.line.lfg": "  lfg <span class=\"muted\">— hackers looking for a team</span>",
   "help.line.lfg_hackathon": "  lfg --hackathon &lt;name&gt; <span class=\"muted\">— filter by hackathon</span>",
   "help.line.lfg_post": "  lfg --post <span class=\"muted\">— post your team search</span>",
+  "help.line.room": "  room <span class=\"muted\">— virtual brainstorm room (collaborative idea funnel)</span>",
+  "help.line.room_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— create a new room and share the link</span>",
+  "help.line.room_join": "  room join &lt;slug&gt; <span class=\"muted\">— join an existing room</span>",
   "help.line.theme": "  theme <span class=\"muted\">— toggle between light and dark mode</span>",
   "help.line.theme_set": "  theme &lt;dark|light&gt; <span class=\"muted\">— set theme explicitly</span>",
   "help.line.lang": "  lang <span class=\"muted\">— show current language</span>",
@@ -125,5 +128,14 @@
   "placeholder.hint_2": "type list to see hackathons",
   "placeholder.hint_3": "type lfg to find a team",
   "placeholder.hint_4": "type theme dark for dark mode",
-  "placeholder.hint_5": "type submit to submit one"
+  "placeholder.hint_5": "type submit to submit one",
+
+  "room.missing_env": "supabase env missing; rooms are not configured.",
+  "room.invalid_slug": "invalid slug. example: swift-orca-9k",
+  "room.usage_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— create a new room</span>",
+  "room.usage_join": "  room join &lt;slug&gt; <span class=\"muted\">— join an existing room</span>",
+  "room.created": "room {slug} created.",
+  "room.open_link": "open: {link}",
+  "room.share_hint": "share that link with your team so they can join the room.",
+  "room.create_failed": "could not create room: {msg}"
 }

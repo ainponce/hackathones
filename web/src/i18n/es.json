@@ -14,6 +14,9 @@
   "help.line.lfg": "  lfg <span class=\"muted\">— hackers buscando equipo</span>",
   "help.line.lfg_hackathon": "  lfg --hackathon &lt;nombre&gt; <span class=\"muted\">— filtrar por hackathon</span>",
   "help.line.lfg_post": "  lfg --post <span class=\"muted\">— publicar tu busqueda de equipo</span>",
+  "help.line.room": "  room <span class=\"muted\">— sala virtual de brainstorm (proceso colaborativo de ideas)</span>",
+  "help.line.room_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— crear una sala y compartir el link</span>",
+  "help.line.room_join": "  room join &lt;slug&gt; <span class=\"muted\">— entrar a una sala existente</span>",
   "help.line.theme": "  theme <span class=\"muted\">— alternar entre light y dark mode</span>",
   "help.line.theme_set": "  theme &lt;dark|light&gt; <span class=\"muted\">— fijar tema explicitamente</span>",
   "help.line.lang": "  lang <span class=\"muted\">— ver idioma actual</span>",
@@ -125,5 +128,14 @@
   "placeholder.hint_2": "escribe list para ver hackathones",
   "placeholder.hint_3": "escribe lfg para buscar equipo",
   "placeholder.hint_4": "escribe theme dark para dark mode",
-  "placeholder.hint_5": "escribe submit para enviar uno"
+  "placeholder.hint_5": "escribe submit para enviar uno",
+
+  "room.missing_env": "falta el env de supabase; las salas no estan configuradas.",
+  "room.invalid_slug": "slug invalido. ejemplo: swift-orca-9k",
+  "room.usage_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— crear una sala nueva</span>",
+  "room.usage_join": "  room join &lt;slug&gt; <span class=\"muted\">— entrar a una sala existente</span>",
+  "room.created": "sala {slug} creada.",
+  "room.open_link": "abrir: {link}",
+  "room.share_hint": "compartí ese link con tu equipo para que entren a la sala.",
+  "room.create_failed": "no se pudo crear la sala: {msg}"
 }

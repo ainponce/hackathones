@@ -1,0 +1,573 @@
+/* Virtual brainstorm room — chat-style UI with terminal aesthetic.
+ * Mono font, thin borders, square brackets on every button, colors from the
+ * shared CSS variables so dark/light themes apply automatically. */
+
+.room-shell {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 3rem;
+  font-family: var(--font-mono);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ---------- Header ---------- */
+
+.room-header2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  padding-bottom: 0.75rem;
+}
+
+.room-header-left { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.room-header-right { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+.room-title-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.room-title {
+  font-weight: 700;
+  font-size: 1.05em;
+}
+
+.room-meta-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.88em;
+  flex-wrap: wrap;
+}
+
+.room-phase-pill {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.8em;
+  border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  padding: 0.1rem 0.5rem;
+}
+
+.room-live { color: var(--text); font-size: 0.85em; }
+.room-reconnecting { color: var(--muted); font-size: 0.85em; }
+
+/* ---------- Buttons ---------- */
+
+.room-btn {
+  font: inherit;
+  font-size: 0.92em;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 35%, transparent);
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.room-btn:hover:not(:disabled) {
+  border-color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.room-btn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.room-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.room-btn-primary {
+  border-color: var(--text);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.room-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.room-btn-quiet {
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.room-btn-quiet:hover:not(:disabled) {
+  color: var(--text);
+  background: transparent;
+}
+
+.room-btn-tiny {
+  font-size: 0.85em;
+  padding: 0.2rem 0.55rem;
+}
+
+.room-btn.is-active {
+  border-color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-weight: 700;
+}
+
+.room-btn-ready.is-ready {
+  border-color: var(--text);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  font-weight: 700;
+}
+
+/* ---------- Participants strip ---------- */
+
+.room-participants {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.85em;
+}
+
+.room-chip {
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  padding: 0.1rem 0.5rem;
+  color: var(--text);
+}
+
+.room-chip.is-stale { opacity: 0.45; }
+.room-chip.is-ready { border-color: var(--text); font-weight: 700; }
+.room-chip.is-me { background: color-mix(in srgb, var(--text) 6%, transparent); }
+
+/* ---------- Toasts (ephemeral activity) ---------- */
+
+.room-toasts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85em;
+  min-height: 0;
+}
+
+.room-toast { color: var(--muted); }
+.room-toast.room-line-info { color: var(--text); }
+.room-toast.room-line-success { color: var(--text); font-weight: 700; }
+.room-toast.room-line-error { color: var(--error, #c14b4b); }
+
+/* ---------- Phase pane (shared shell) ---------- */
+
+.phase-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.phase-instructions {
+  font-size: 0.92em;
+  color: var(--muted);
+}
+
+.phase-instructions strong {
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85em;
+  margin-right: 0.5rem;
+}
+
+/* ---------- Message list (chat-style) ---------- */
+
+.msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+  min-height: 12rem;
+  max-height: calc(100dvh - 22rem);
+}
+
+.msg-empty {
+  font-style: italic;
+  padding: 1rem 0;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.45rem 0.75rem;
+  border-left: 2px solid color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.msg-mine {
+  border-left-color: var(--text);
+}
+
+.msg-voted {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.msg-picked {
+  border-left-color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+  padding: 0.7rem 0.85rem;
+  gap: 0.5rem;
+}
+
+.msg-meta {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 0.85em;
+}
+
+.msg-handle { font-weight: 700; }
+.msg-id { font-feature-settings: "tnum" 1; }
+.msg-time {}
+
+.msg-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.msg-votes { font-size: 0.85em; }
+
+.msg-remove { margin-left: auto; }
+
+.msg-body {
+  font-size: 0.98em;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.msg-body-large { font-size: 1.05em; font-weight: 600; }
+
+.msg-pill {
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  padding: 0.05rem 0.4rem;
+}
+
+/* ---------- Composer (bottom input row) ---------- */
+
+.composer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  padding-top: 0.75rem;
+}
+
+.composer-input {
+  flex: 1;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+}
+
+.composer-input:focus {
+  border-color: var(--text);
+}
+
+/* ---------- Generic input reset ---------- */
+
+.room-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  padding: 0.25rem 0;
+}
+
+.room-input::placeholder { color: var(--muted); }
+
+/* ---------- Assess rows ---------- */
+
+.assess-row {
+  display: grid;
+  grid-template-columns: 8rem 1fr;
+  gap: 0.5rem 1rem;
+  align-items: start;
+  font-size: 0.9em;
+  padding-top: 0.4rem;
+  border-top: 1px dashed color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.assess-row-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding-top: 0.35rem;
+}
+
+.assess-row-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.assess-note {
+  flex: 1;
+  min-width: 12rem;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  padding: 0.3rem 0.5rem;
+}
+
+.assess-note:focus { border-color: var(--text); }
+
+.assess-row-tally {
+  grid-column: 2;
+  font-size: 0.85em;
+}
+
+.assess-notes { font-style: italic; }
+
+/* ---------- Persona ---------- */
+
+.winner-banner {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+.winner-text {
+  font-weight: 700;
+  font-size: 1.02em;
+}
+
+.persona-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.persona-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.78em;
+  color: var(--muted);
+}
+
+.persona-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.persona-input {
+  flex: 1;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  padding: 0.4rem 0.6rem;
+}
+
+.persona-input:focus { border-color: var(--text); }
+
+/* ---------- Scope ---------- */
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 900px) {
+  .scope-grid { grid-template-columns: 1fr; }
+}
+
+.scope-bucket {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  padding: 0.9rem;
+}
+
+.scope-bucket-h {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  padding-bottom: 0.4rem;
+}
+
+.scope-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-height: 3rem;
+}
+
+.scope-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  font-size: 0.92em;
+  padding: 0.25rem 0.4rem;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+.scope-item > span:first-child {
+  flex: 1;
+  word-break: break-word;
+}
+
+.scope-item-empty {
+  font-style: italic;
+  background: transparent;
+  border-left: none;
+  padding: 0.25rem 0;
+}
+
+.scope-add {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+  align-items: stretch;
+}
+
+.scope-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  padding: 0.4rem 0.6rem;
+}
+
+.scope-input:focus { border-color: var(--text); }
+
+.scope-add-btn {
+  min-width: 3.2rem;
+  font-weight: 700;
+}
+
+/* ---------- Brief (done) ---------- */
+
+.room-brief {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  padding: 0.5rem 0;
+  max-height: none;
+}
+
+.brief-line { font-size: 0.95em; }
+.brief-rule { color: var(--muted); }
+.brief-section { font-weight: 700; margin-top: 0.5rem; margin-bottom: 0.25rem; }
+.brief-sub { font-weight: 700; color: var(--muted); }
+.brief-winner { font-weight: 700; }
+
+.brief-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* ---------- Onboarding ---------- */
+
+.room-onboarding {
+  justify-content: flex-start;
+  padding-top: 4rem;
+}
+
+.room-banner { margin-bottom: 1.5rem; }
+
+.room-banner-art {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.25;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text);
+  margin: 0;
+}
+
+.room-onboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 36rem;
+}
+
+.room-onboard-heading {
+  font-weight: 700;
+  font-size: 1.05em;
+}
+
+.room-onboard-share {
+  margin-top: 0.5rem;
+  font-size: 0.85em;
+  word-break: break-all;
+}
+
+.room-onboard-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.room-onboard-input {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  padding-left: 0.25rem;
+  min-width: 14rem;
+}
+
+.room-onboard-input:focus {
+  border-bottom-color: var(--text);
+}
+
+.room-prompt-tag {
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+/* ---------- Misc shared ---------- */
+
+.room-line { line-height: 1.55; }
+.room-muted, .room-line-muted { color: var(--muted); }
+.room-error, .room-line-error { color: var(--error, #c14b4b); }
+
+.room-back {
+  align-self: flex-start;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9em;
+  margin-top: 1rem;
+}
+
+.room-back:hover { color: var(--text); }

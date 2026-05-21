@@ -38,10 +38,17 @@ const htmlLang = T["meta.html.lang"] as string;
         var segments = path.split("/").filter(Boolean);
         var current = segments.length > 0 && LOCALES.indexOf(segments[0]) !== -1 ? segments[0] : "en";
 
+        // Pages other than the home route are locale-agnostic (e.g. /room,
+        // /loader-logo). Redirecting them to /es/ or /pt/ would dump them on
+        // the localized home — losing the path and the query string. Only
+        // the home route ("/" or just a locale prefix like "/es/") is
+        // subject to the saved-preference redirect.
+        var isHomeRoute = path === "/" || (segments.length === 1 && LOCALES.indexOf(segments[0]) !== -1);
+
         if (current !== "en") {
           // Explicit non-default locale URL — trust it and sync the pref.
           localStorage.setItem("lang", current);
-        } else {
+        } else if (isHomeRoute) {
           var saved = localStorage.getItem("lang");
           var target = null;
 
