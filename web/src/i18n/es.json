@@ -132,10 +132,10 @@
 
   "room.missing_env": "falta el env de supabase; las salas no estan configuradas.",
   "room.invalid_slug": "slug invalido. ejemplo: swift-orca-9k",
-  "room.joining": "entrando a {slug}...",
   "room.usage_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— crear una sala nueva</span>",
   "room.usage_join": "  room join &lt;slug&gt; <span class=\"muted\">— entrar a una sala existente</span>",
   "room.created": "sala {slug} creada.",
-  "room.share": "compartir este link: {url}",
+  "room.open_link": "abrir: {link}",
+  "room.share_hint": "compartí ese link con tu equipo para que entren a la sala.",
   "room.create_failed": "no se pudo crear la sala: {msg}"
 }

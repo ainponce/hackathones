@@ -1086,8 +1086,9 @@ const LOCALE = locale;
           await typePrint(t("room.invalid_slug"), "muted", 12);
           return;
         }
-        await typePrint(t("room.joining", { slug: slug }), "muted", 10);
-        setTimeout(function () { window.location.href = "/room?id=" + encodeURIComponent(slug); }, 350);
+        var joinUrl = window.location.origin + "/room?id=" + encodeURIComponent(slug);
+        var joinAnchor = '<a class="link" href="' + esc(joinUrl) + '" target="_blank" rel="noopener">' + esc(joinUrl) + '</a>';
+        await typePrint(t("room.open_link", { link: joinAnchor }), null, 8);
         return;
       }
       // Bare `room` — print sub-command help.
@@ -1134,8 +1135,9 @@ const LOCALE = locale;
           } catch (e) {}
           await typePrint(t("room.created", { slug: slug }), "bold", 10);
           var shareUrl = window.location.origin + "/room?id=" + encodeURIComponent(slug);
-          await typePrint(t("room.share", { url: esc(shareUrl) }), "muted", 8);
-          setTimeout(function () { window.location.href = "/room?id=" + encodeURIComponent(slug); }, 800);
+          var shareAnchor = '<a class="link" href="' + esc(shareUrl) + '" target="_blank" rel="noopener">' + esc(shareUrl) + '</a>';
+          await typePrint(t("room.open_link", { link: shareAnchor }), null, 8);
+          await typePrint(t("room.share_hint"), "muted", 8);
           return;
         } catch (e) {
           await typePrint(t("room.create_failed", { msg: esc(String(e && e.message ? e.message : e)) }), "muted", 12);

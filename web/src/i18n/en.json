@@ -132,10 +132,10 @@
 
   "room.missing_env": "supabase env missing; rooms are not configured.",
   "room.invalid_slug": "invalid slug. example: swift-orca-9k",
-  "room.joining": "joining {slug}...",
   "room.usage_create": "  room create [--locale=&lt;en|es|pt&gt;] <span class=\"muted\">— create a new room</span>",
   "room.usage_join": "  room join &lt;slug&gt; <span class=\"muted\">— join an existing room</span>",
   "room.created": "room {slug} created.",
-  "room.share": "share this link: {url}",
+  "room.open_link": "open: {link}",
+  "room.share_hint": "share that link with your team so they can join the room.",
   "room.create_failed": "could not create room: {msg}"
 }
