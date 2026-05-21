@@ -1087,7 +1087,7 @@ const LOCALE = locale;
           return;
         }
         await typePrint(t("room.joining", { slug: slug }), "muted", 10);
-        setTimeout(function () { window.location.href = "/room/" + slug; }, 350);
+        setTimeout(function () { window.location.href = "/room?id=" + encodeURIComponent(slug); }, 350);
         return;
       }
       // Bare `room` — print sub-command help.
@@ -1133,9 +1133,9 @@ const LOCALE = locale;
             }));
           } catch (e) {}
           await typePrint(t("room.created", { slug: slug }), "bold", 10);
-          var shareUrl = window.location.origin + "/room/" + slug;
+          var shareUrl = window.location.origin + "/room?id=" + encodeURIComponent(slug);
           await typePrint(t("room.share", { url: esc(shareUrl) }), "muted", 8);
-          setTimeout(function () { window.location.href = "/room/" + slug; }, 800);
+          setTimeout(function () { window.location.href = "/room?id=" + encodeURIComponent(slug); }, 800);
           return;
         } catch (e) {
           await typePrint(t("room.create_failed", { msg: esc(String(e && e.message ? e.message : e)) }), "muted", 12);
