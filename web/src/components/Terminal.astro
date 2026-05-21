@@ -42,6 +42,7 @@ const LOCALE = locale;
       <button data-cmd="submit">submit</button>
       <button data-cmd="lfg">lfg</button>
       <button data-cmd="theme">theme</button>
+      <button data-cmd="room create">room</button>
       <button data-cmd="clear">clear</button>
       <button data-cmd="help">help</button>
     </div>
@@ -303,6 +304,9 @@ const LOCALE = locale;
         t("help.line.lfg"),
         t("help.line.lfg_hackathon"),
         t("help.line.lfg_post"),
+        t("help.line.room"),
+        t("help.line.room_create"),
+        t("help.line.room_join"),
         t("help.line.theme"),
         t("help.line.theme_set"),
         t("help.line.lang"),
@@ -1041,6 +1045,106 @@ const LOCALE = locale;
       resetPrompt();
     }
 
+    // --- Room (virtual brainstorm sub-terminal) ---
+
+    // Slug generator — three-token, ~50k pool. Matches what the room island
+    // expects in the /room/<slug> URL. Tokens are 256-bit random hex.
+    const ROOM_ADJ = ["swift","amber","lunar","neon","warm","fizzy","glassy","humble","stoic","vivid","fuzzy","crisp","dusty","salty","iron","ember","dusk","dawn","muted","loud","sunny","rainy","foggy","windy","kind","brave","wild","snug","tiny","giant","lazy","agile","feral","tame","open","shy","bold","calm","lean","rich","sleek","raw","pure","deep","wide","tall","slim","fast"];
+    const ROOM_NOUN = ["orca","bear","tiger","ferret","fox","owl","wolf","lion","lynx","moose","otter","panda","raven","salmon","sparrow","stag","hawk","eagle","swan","crane","loon","puma","shark","whale","mantis","moth","newt","panther","rabbit","raccoon","robin","seal","skunk","snail","snake","spider","squid","starling","swift","turkey","viper","weasel","wombat","yak","zebra","cobra","dolphin","dragon"];
+
+    function roomGenSlug() {
+      var pick = function (a) { return a[Math.floor(Math.random() * a.length)]; };
+      var alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+      var suffix = "";
+      for (var i = 0; i < 2; i++) suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+      return pick(ROOM_ADJ) + "-" + pick(ROOM_NOUN) + "-" + suffix;
+    }
+
+    function roomGenToken() {
+      var bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      var hex = "";
+      for (var i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
+      return hex;
+    }
+
+    async function cmdRoom(args) {
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+        await typePrint(t("room.missing_env"), "muted", 12);
+        return;
+      }
+      var sub = (args[0] || "").toLowerCase();
+      if (sub === "create") {
+        var localeArg = extractFlag(args, "--locale") || LOCALE;
+        if (["en", "es", "pt"].indexOf(localeArg) === -1) localeArg = "en";
+        await roomCreate(localeArg);
+        return;
+      }
+      if (sub === "join") {
+        var slug = (args[1] || "").trim().toLowerCase();
+        if (!/^[a-z0-9-]{3,64}$/.test(slug)) {
+          await typePrint(t("room.invalid_slug"), "muted", 12);
+          return;
+        }
+        await typePrint(t("room.joining", { slug: slug }), "muted", 10);
+        setTimeout(function () { window.location.href = "/room/" + slug; }, 350);
+        return;
+      }
+      // Bare `room` — print sub-command help.
+      await typePrint(t("room.usage_create"), null, 8);
+      await typePrint(t("room.usage_join"), null, 8);
+    }
+
+    async function roomCreate(localeArg) {
+      var attempts = 0;
+      while (attempts < 3) {
+        attempts++;
+        var slug = roomGenSlug();
+        var sessionToken = roomGenToken();
+        var hostToken = roomGenToken();
+        try {
+          var res = await fetch(SUPABASE_URL + "/rest/v1/rooms", {
+            method: "POST",
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: "Bearer " + SUPABASE_ANON_KEY,
+              "Content-Type": "application/json",
+              "Prefer": "return=minimal",
+              "x-session-token": sessionToken,
+              "x-host-token": hostToken,
+            },
+            body: JSON.stringify({
+              slug: slug,
+              host_token: hostToken,
+              locale: localeArg,
+            }),
+          });
+          if (res.status === 409) continue;  // slug collision, retry
+          if (!res.ok) {
+            var msg = await res.text();
+            await typePrint(t("room.create_failed", { msg: esc(msg.slice(0, 200)) }), "muted", 12);
+            return;
+          }
+          try {
+            localStorage.setItem("room:" + slug + ":session", JSON.stringify({
+              sessionToken: sessionToken,
+              handle: null,
+              hostToken: hostToken,
+            }));
+          } catch (e) {}
+          await typePrint(t("room.created", { slug: slug }), "bold", 10);
+          var shareUrl = window.location.origin + "/room/" + slug;
+          await typePrint(t("room.share", { url: esc(shareUrl) }), "muted", 8);
+          setTimeout(function () { window.location.href = "/room/" + slug; }, 800);
+          return;
+        } catch (e) {
+          await typePrint(t("room.create_failed", { msg: esc(String(e && e.message ? e.message : e)) }), "muted", 12);
+          return;
+        }
+      }
+      await typePrint(t("room.create_failed", { msg: "slug collision" }), "muted", 12);
+    }
+
     // --- Parser ---
 
     function extractFlag(args, flag) {
@@ -1114,6 +1218,7 @@ const LOCALE = locale;
           break;
         case "submit": await startSubmit(); break;
         case "lfg": await cmdLfg(args); scrollHandled = true; break;
+        case "room": await cmdRoom(args); break;
         case "theme": await cmdTheme(args); break;
         case "lang": await cmdLang(args); break;
         case "clear": case "cls": cmdClear(); break;
@@ -1127,8 +1232,9 @@ const LOCALE = locale;
     }
 
     // --- Autocomplete ---
-    const COMMANDS = ["help", "list", "submit", "lfg", "theme", "lang", "clear", "about"];
-    const FLAGS = ["--country", "--city", "--type", "--tag", "--legacy", "--hackathon", "--post"];
+    const COMMANDS = ["help", "list", "submit", "lfg", "room", "theme", "lang", "clear", "about"];
+    const FLAGS = ["--country", "--city", "--type", "--tag", "--legacy", "--hackathon", "--post", "--locale"];
+    const ROOM_SUBS = ["create", "join"];
     const THEME_OPTS = ["dark", "light"];
     const LANG_OPTS = ["en", "es", "pt"];
     let suggestion = "";
@@ -1155,6 +1261,10 @@ const LOCALE = locale;
       }
       if (cmd0 === "lang" && parts.length === 2 && !last.startsWith("-")) {
         const match = LANG_OPTS.find(opt => opt.startsWith(last) && opt !== last);
+        return match ? match.slice(last.length) : "";
+      }
+      if (cmd0 === "room" && parts.length === 2 && !last.startsWith("-")) {
+        const match = ROOM_SUBS.find(opt => opt.startsWith(last) && opt !== last);
         return match ? match.slice(last.length) : "";
       }
       return "";

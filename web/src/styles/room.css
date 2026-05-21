@@ -1,0 +1,210 @@
+/* Virtual brainstorm room styles. Terminal-flavored to match the main site:
+ * mono font, sparse chrome, two-pane layout (stream + sidebar), sticky prompt.
+ * No emoji except the structured Brief view, where the icons give jerarquía. */
+
+.room-shell {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+  font-family: var(--font-mono);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.room-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem 1.5rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  padding-bottom: 0.5rem;
+}
+
+.room-title {
+  font-weight: 700;
+}
+
+.room-sub {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.room-status {
+  margin-left: auto;
+  font-size: 0.85em;
+}
+
+.room-live { color: var(--text); }
+.room-reconnecting { color: var(--muted); }
+
+.room-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18rem;
+  gap: 1.5rem;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  .room-body { grid-template-columns: 1fr; }
+}
+
+.room-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 60vh;
+}
+
+.room-stream {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.room-line {
+  font-size: 0.95em;
+  line-height: 1.55;
+  padding: 0.05rem 0;
+}
+
+.room-line-echo { font-weight: 700; }
+.room-line-info { }
+.room-line-muted, .room-muted { color: var(--muted); }
+.room-line-error, .room-error { color: var(--error, #c14b4b); }
+.room-line-success { color: var(--success, var(--text)); font-weight: 700; }
+
+.room-prompt-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  padding-top: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.room-prompt-tag {
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.room-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  padding: 0.4rem 0;
+}
+
+.room-input::placeholder { color: var(--muted); }
+
+.room-btn {
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+}
+
+.room-btn:hover {
+  border-color: var(--text);
+}
+
+.room-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  border-left: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  padding-left: 1.5rem;
+  font-size: 0.9em;
+  overflow-y: auto;
+  max-height: 80vh;
+}
+
+@media (max-width: 900px) {
+  .room-side {
+    border-left: none;
+    border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+    padding-left: 0;
+    padding-top: 1rem;
+    max-height: none;
+  }
+}
+
+.room-side-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.room-side-h {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.room-side-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.room-mono { font-feature-settings: "tnum" 1; opacity: 0.7; }
+.room-idea-text { flex: 1; }
+
+.room-onboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 36rem;
+}
+
+.room-onboard-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.room-onboard-form .room-prompt {
+  color: var(--muted);
+}
+
+.room-back {
+  align-self: flex-start;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9em;
+  margin-top: 1rem;
+}
+
+.room-back:hover { color: var(--text); }
+
+/* Brief view */
+
+.room-brief {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  padding: 0.5rem 0;
+}
+
+.brief-line { font-size: 0.95em; }
+.brief-rule { color: var(--muted); }
+.brief-section { font-weight: 700; margin-top: 0.5rem; margin-bottom: 0.25rem; }
+.brief-sub { font-weight: 700; color: var(--muted); }
+.brief-winner { font-weight: 700; }
+.brief-hint { color: var(--muted); margin-top: 0.75rem; font-size: 0.9em; }
+.brief-stream { color: var(--muted); }
