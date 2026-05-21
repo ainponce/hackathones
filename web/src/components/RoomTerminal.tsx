@@ -1218,10 +1218,10 @@ function ScopeBucket({
         {items.map((it, i) => (
           <li key={`${i}-${it}`} className="scope-item">
             <span>{it}</span>
-            <button type="button" className="room-btn room-btn-tiny" onClick={() => onRemove(i)}>[×]</button>
+            <button type="button" className="room-btn room-btn-tiny" onClick={() => onRemove(i)} aria-label="remove">[ × ]</button>
           </li>
         ))}
-        {items.length === 0 && <li className="room-muted scope-item-empty">—</li>}
+        {items.length === 0 && <li className="room-muted scope-item-empty">no items yet</li>}
       </ul>
       <form
         className="scope-add"
@@ -1235,7 +1235,7 @@ function ScopeBucket({
           placeholder="add…"
           className="room-input scope-input"
         />
-        <button type="submit" className="room-btn room-btn-tiny" disabled={!draft.trim()}>[ + ]</button>
+        <button type="submit" className="room-btn room-btn-tiny scope-add-btn" disabled={!draft.trim()}>[ add ]</button>
       </form>
     </div>
   );
