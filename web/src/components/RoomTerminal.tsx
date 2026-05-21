@@ -939,31 +939,43 @@ export default function RoomTerminal() {
   // Onboarding (no handle yet)
   if (!session?.handle) {
     const shareUrl = typeof window !== "undefined" ? window.location.href : "";
+    const aliveCountValue = aliveCount(state);
+    const totalParticipants = state.participants.size;
     return (
-      <div className="room-shell">
-        <div className="room-header">
-          <span className="room-title">{t("title")} / {slug}</span>
-          <span className="room-sub">{t("subtitle")}</span>
+      <div className="room-shell room-onboarding">
+        <div className="room-banner">
+          <pre className="room-banner-art">{`╔══════════════════════════════════════════════════════╗
+║                                                      ║
+║  ROOM ${(slug ?? "").padEnd(46, " ")} ║
+║  ${t("subtitle").padEnd(52, " ")}║
+║                                                      ║
+╚══════════════════════════════════════════════════════╝`}</pre>
         </div>
         <div className="room-onboard">
-          <div className="room-line">{t("onboard.heading")}</div>
-          <div className="room-line room-muted">{t("onboard.share", { url: shareUrl })}</div>
+          <div className="room-line room-onboard-heading">{t("onboard.heading")}</div>
+          {totalParticipants > 0 && (
+            <div className="room-line room-muted">
+              {t("status.quorum", { ready: 0, total: aliveCountValue })} · {Array.from(state.participants.values()).map((p) => "@" + p.handle).join(", ")}
+            </div>
+          )}
           <form
             className="room-onboard-form"
             onSubmit={(e) => { e.preventDefault(); onJoin(pendingHandle); }}
           >
-            <span className="room-prompt">{t("onboard.handle_prompt")}</span>
+            <span className="room-prompt-tag">{t("onboard.handle_prompt")}</span>
             <input
               autoFocus
               type="text"
               maxLength={32}
+              placeholder="aiponce"
               value={pendingHandle}
               onChange={(e) => setPendingHandle(e.target.value)}
-              className="room-input"
+              className="room-input room-onboard-input"
             />
-            <button type="submit" className="room-btn">{t("onboard.cta")}</button>
+            <button type="submit" className="room-btn">[ {t("onboard.cta")} ]</button>
           </form>
           {pendingHandleError && <div className="room-line room-error">{pendingHandleError}</div>}
+          <div className="room-line room-muted room-onboard-share">{t("onboard.share", { url: shareUrl })}</div>
         </div>
         <a className="room-back" href="/">{t("back_to_main")}</a>
       </div>

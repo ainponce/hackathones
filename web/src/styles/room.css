@@ -164,21 +164,57 @@
 .room-mono { font-feature-settings: "tnum" 1; opacity: 0.7; }
 .room-idea-text { flex: 1; }
 
+.room-onboarding {
+  justify-content: flex-start;
+  padding-top: 4rem;
+}
+
+.room-banner {
+  margin-bottom: 1.5rem;
+}
+
+.room-banner-art {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.25;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text);
+  margin: 0;
+}
+
 .room-onboard {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.75rem;
   max-width: 36rem;
+}
+
+.room-onboard-heading {
+  font-weight: 700;
+  font-size: 1.05em;
+}
+
+.room-onboard-share {
+  margin-top: 0.5rem;
+  font-size: 0.85em;
+  word-break: break-all;
 }
 
 .room-onboard-form {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  margin-top: 0.5rem;
 }
 
-.room-onboard-form .room-prompt {
-  color: var(--muted);
+.room-onboard-input {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  padding-left: 0.25rem;
+}
+
+.room-onboard-input:focus {
+  border-bottom-color: var(--text);
 }
 
 .room-back {
